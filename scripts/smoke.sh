@@ -20,6 +20,14 @@ rm -f checkpoints/smoke_train.pt results/smoke_train_losses.csv results/smoke_tr
 python -m src.experiments.train_pcim --config configs/train_pcim_cpu.yaml \
     --smoke --run-name smoke_train
 echo
+echo "== L_pres ablation (smoke) =="
+rm -f checkpoints/smoke_ablate_lpres_on.pt checkpoints/smoke_ablate_lpres_off.pt \
+      results/smoke_ablate_lpres_on_losses.csv results/smoke_ablate_lpres_on_eval.csv \
+      results/smoke_ablate_lpres_off_losses.csv results/smoke_ablate_lpres_off_eval.csv \
+      results/smoke_ablate_result.json
+python -m src.experiments.ablate_lpres --config configs/train_pcim_cpu.yaml \
+    --smoke --run-prefix smoke_ablate
+echo
 echo "== gradio demo (construction only, no server) =="
 python -c "from src.demo.app import build_demo; build_demo(); print('  demo builds OK')"
 echo
