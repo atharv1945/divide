@@ -179,55 +179,39 @@ def classical_pipeline(img: np.ndarray) -> np.ndarray:
 # deep restorers (lazy, fail loudly)
 # --------------------------------------------------------------------------
 
-DEEP_SPECS = {
-    "nafnet": dict(
-        url="https://github.com/megvii-research/NAFNet",
-        weights="NAFNet-SIDD-width64.pth",
-        note="Download from the NAFNet repo README (Google Drive) into checkpoints/.",
-    ),
-    "restormer": dict(
-        url="https://github.com/swz30/Restormer",
-        weights="real_denoising.pth",
-        note="Restormer release assets on GitHub; place in checkpoints/.",
-    ),
-    "promptir": dict(
-        url="https://github.com/va1shn9v/PromptIR",
-        weights="promptir_all.ckpt",
-        note="Checkpoint linked from the PromptIR repo README.",
-    ),
-}
+def _deep_specs() -> dict:
+    from src.models.deep_restorers import REPO_SPECS
+    return REPO_SPECS
 
 
-def _deep_unavailable(name: str):
-    spec = DEEP_SPECS[name]
+# Backward-compatible alias: repo/weights info for each deep restorer,
+# sourced from deep_restorers.REPO_SPECS so there is one place that knows
+# the download URLs.
+DEEP_SPECS = _deep_specs()
 
+
+def _deep_unavailable(name: str, err: Exception):
     def fn(img: np.ndarray) -> np.ndarray:
-        raise RuntimeError(
-            f"\n{'=' * 70}\nRestorer {name!r} has no weights available.\n"
-            f"Repo:    {spec['url']}\nWeights: {spec['weights']}\n{spec['note']}\n"
-            f"Place the file under checkpoints/ and re-run.\n"
-            f"To run without it, drop {name!r} from the config's `restorers` list.\n"
-            f"{'=' * 70}"
-        )
+        raise err
     return fn
 
 
 def load_deep(name: str) -> Restorer | None:
-    """Try to build a deep restorer. Returns None if torch/weights are absent."""
-    from src.utils.paths import checkpoints_dir
-    spec = DEEP_SPECS.get(name)
-    if spec is None:
+    """Try to build a deep restorer.
+
+    Returns a Restorer whose call raises RuntimeError with the exact
+    download URL if weights/repo are absent - never None for a name that IS
+    a known deep restorer, and never a silent skip. Returns None only if
+    `name` isn't a deep restorer at all (so the caller can report "unknown
+    restorer" instead).
+    """
+    if name not in DEEP_SPECS:
         return None
-    path = checkpoints_dir() / spec["weights"]
-    if not path.exists():
-        return Restorer(name, _deep_unavailable(name), tier="deep", needs_gpu=True)
+    from src.models.deep_restorers import build_deep_restorer
     try:
-        import torch  # noqa: F401
-    except ImportError:
-        return Restorer(name, _deep_unavailable(name), tier="deep", needs_gpu=True)
-    # Real loaders are wired in on the GPU machine; the interface is fixed here
-    # so the study script never needs to change.
-    return Restorer(name, _deep_unavailable(name), tier="deep", needs_gpu=True)
+        return build_deep_restorer(name)
+    except RuntimeError as e:
+        return Restorer(name, _deep_unavailable(name, e), tier="deep", needs_gpu=True)
 
 
 # --------------------------------------------------------------------------

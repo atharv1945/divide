@@ -40,7 +40,8 @@ def data_root() -> Path:
 def mvtec_root() -> Path:
     root = data_root()
     # Kaggle slugs directories; accept several spellings.
-    for name in ("mvtec_ad", "mvtec-ad", "mvtecad", "MVTec_AD", "mvtec-anomaly-detection"):
+    for name in ("mvtec_ad", "mvtec-ad", "mvtecad", "MVTec_AD", "mvtec-anomaly-detection",
+                 "mvtec", "MVTec"):
         p = root / name
         if p.exists():
             # Kaggle sometimes nests one level deeper.
@@ -94,6 +95,19 @@ def figures_dir() -> Path:
 
 def checkpoints_dir() -> Path:
     p = out_root() / "checkpoints"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def third_party_dir() -> Path:
+    """Where vendored model repos (NAFNet, Restormer, DiffBIR, ...) are cloned.
+
+    These are code, not data - git-clonable, so unlike weights they can be
+    fetched programmatically. Kept out of the repo (see .gitignore) since each
+    is its own multi-hundred-file project.
+    """
+    env = os.environ.get("DIVIDE_THIRD_PARTY_ROOT")
+    p = Path(env) if env else repo_root() / "third_party"
     p.mkdir(parents=True, exist_ok=True)
     return p
 

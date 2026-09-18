@@ -9,4 +9,5 @@ checkpoints/
 venv/
 mvtec/
 dtd/
+third_party/
 

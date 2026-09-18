@@ -12,7 +12,16 @@ tqdm>=4.65
 # GPU / deep learning (installed on Kaggle; not needed for CPU-only modules)
 torch>=2.0
 torchvision>=0.15
-anomalib==1.1.0
-timm>=0.9
+# anomalib's PyPI package installs almost no deps by default - the actual model
+# stack (lightning, kornia, freia, open-clip-torch, ...) is gated behind the
+# `core` extra. Plain `anomalib==1.1.0` imports but every model class fails
+# with ModuleNotFoundError the first time you touch it.
+anomalib[core]==1.1.0
+# anomalib[core] pins timm<=1.0.3; a bare `timm>=0.9` resolves to something
+# newer and conflicts with it.
+timm>=0.9,<=1.0.3
 lpips>=0.1.4
 gradio>=4.0
+
+# dev / test
+pytest>=7.0

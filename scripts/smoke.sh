@@ -10,4 +10,19 @@ python -m src.experiments.drr_study --smoke --n-images 4 \
     --families defocus noise --severities 3 \
     --restorers identity gaussian nlm clahe wiener --tag smoke
 echo
+echo "== deep restorer registry (fail-loud check, no weights present) =="
+python -c "
+from src.models.restorers import get_restorer, DEEP_SPECS
+import numpy as np
+img = np.zeros((16, 16, 3), np.float32)
+for name in DEEP_SPECS:
+    r = get_restorer(name)
+    try:
+        r(img)
+        raise SystemExit(f'{name}: expected RuntimeError for missing weights, got none')
+    except RuntimeError as e:
+        assert DEEP_SPECS[name]['weights_url'] in str(e), name
+        print(f'  {name}: fails loudly with URL, as expected')
+"
+echo
 echo "ALL GREEN"
