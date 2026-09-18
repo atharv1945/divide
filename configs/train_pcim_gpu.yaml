@@ -26,6 +26,9 @@ model:
 
 loss:
   use_lpres: true
+  # See configs/train_pcim_cpu.yaml's comment - first-batch magnitude
+  # normalisation, weights applied on top of that common baseline.
+  normalize: true
   w_rec: 1.0
   w_deg: 0.5
   w_freq: 0.1

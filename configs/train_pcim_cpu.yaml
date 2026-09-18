@@ -30,6 +30,12 @@ model:
 
 loss:
   use_lpres: true
+  # Each term's raw magnitude is measured on the first real training batch
+  # and scaled to a common baseline before these weights are applied - see
+  # train_pcim.py's module docstring. Without this, L_freq's raw magnitude
+  # (1-2 orders of magnitude above the other three) would dominate
+  # regardless of w_freq.
+  normalize: true
   w_rec: 1.0
   w_deg: 0.5
   w_freq: 0.1

@@ -110,14 +110,14 @@ def test_use_lpres_false_excludes_pres_from_backward_but_still_logs_it(cfg, redi
     cfg["loss"]["use_lpres"] = False
     tp.run(cfg, "t4", device="cpu", resume=False, smoke=True, quiet=True)
     losses = pd.read_csv(res_dir / "t4_losses.csv")
-    assert "pres" in losses.columns  # still logged for comparison
-    assert (losses["pres"] >= 0).all()  # a real, computed value - not a placeholder
+    assert "pres_raw" in losses.columns and "pres_scaled" in losses.columns  # still logged
+    assert (losses["pres_raw"] >= 0).all()  # a real, computed value - not a placeholder
 
 
 def test_evaluate_returns_finite_or_nan_metrics(cfg, redirected):
     import numpy as np
     from src.experiments.train_pcim import build_eval_set, evaluate, load_data_pools
-    from src.degrade.anomaly import TextureBank
+    from src.degrade.anomaly import ANOMALY_KINDS, TextureBank
     from src.models.pcim import PCIM
 
     tp, ckpt_dir, res_dir = redirected
@@ -130,3 +130,87 @@ def test_evaluate_returns_finite_or_nan_metrics(cfg, redirected):
     for k in ("relative_drr", "dremr", "psnr_normal"):
         assert np.isfinite(out[k]) or np.isnan(out[k])
     assert out["n"] == len(eval_set)
+    for kind in ANOMALY_KINDS:
+        key = f"relative_drr_{kind}"
+        assert key in out
+        assert np.isfinite(out[key]) or np.isnan(out[key])
+
+
+# --------------------------------------------------------------------------
+# loss normalisation
+# --------------------------------------------------------------------------
+
+def test_calibrate_scale_factors_brings_terms_to_similar_order_of_magnitude():
+    from src.experiments.train_pcim import (
+        LOSS_TERMS, calibrate_scale_factors, compute_raw_losses, load_data_pools,
+    )
+    from src.degrade.anomaly import TextureBank
+    from src.models.pcim import PCIM
+    import numpy as np
+
+    cfg = load_config(SMOKE_CFG_PATH)
+    import src.experiments.train_pcim as tp
+    cfg = tp._apply_smoke_overrides(cfg)
+    pools = load_data_pools(cfg, smoke=True)
+    bank = TextureBank()
+    rng = np.random.default_rng(cfg["seed"])
+    examples = [tp._sample_example(rng, pools, cfg, bank) for _ in range(4)]
+
+    model = PCIM(n_iters=4, rho0=1.0, rho_scale=2.0, prox_width=8, prox_depth=3,
+                illum_clamp=4.0, vst_gain=1.0)
+    scale_factors = calibrate_scale_factors(model, examples, cfg, "cpu")
+    assert set(scale_factors) == set(LOSS_TERMS)
+
+    # after scaling, every term's magnitude on THIS batch is ~1.0 (that's
+    # what "1/raw" means) - the real test is that raw magnitudes differ a
+    # lot while scaled ones don't.
+    raw_means = {k: 0.0 for k in LOSS_TERMS}
+    for ex in examples:
+        with torch.no_grad():
+            raw = compute_raw_losses(model, ex, "cpu")
+        for k in LOSS_TERMS:
+            raw_means[k] += float(raw[k].detach()) / len(examples)
+    scaled_means = {k: raw_means[k] * scale_factors[k] for k in LOSS_TERMS}
+
+    raw_vals = list(raw_means.values())
+    scaled_vals = list(scaled_means.values())
+    assert max(raw_vals) / (min(v for v in raw_vals if v > 0) + 1e-12) > 1.5, (
+        "test fixture should have some raw spread to be a meaningful check")
+    assert max(scaled_vals) / min(scaled_vals) < 1.2  # all ~1.0 after scaling
+
+
+def test_normalize_false_is_a_true_no_op():
+    from src.experiments.train_pcim import LOSS_TERMS, calibrate_scale_factors
+
+    cfg = load_config(SMOKE_CFG_PATH)
+    cfg["loss"]["normalize"] = False
+    scale_factors = calibrate_scale_factors(model=None, examples=[], cfg=cfg, device="cpu")
+    assert scale_factors == {k: 1.0 for k in LOSS_TERMS}
+
+
+def test_scale_factors_persist_across_resume_not_recalibrated(cfg, redirected):
+    """A resumed run must reuse the checkpoint's scale factors, not
+    recompute them from whatever batch it resumes on - otherwise the loss
+    scale (and each term's effective learning rate) would drift depending
+    on where a run was interrupted."""
+    tp, ckpt_dir, res_dir = redirected
+    cfg = copy.deepcopy(cfg)
+    cfg["train"]["steps"] = 6
+
+    tp.run(cfg, "t5", device="cpu", resume=False, max_steps=2, smoke=True, quiet=True)
+    ckpt1 = torch.load(ckpt_dir / "t5.pt", map_location="cpu")
+    assert ckpt1["scale_factors"] is not None
+
+    tp.run(cfg, "t5", device="cpu", resume=True, max_steps=6, smoke=True, quiet=True)
+    ckpt2 = torch.load(ckpt_dir / "t5.pt", map_location="cpu")
+    assert ckpt2["scale_factors"] == ckpt1["scale_factors"]
+
+
+def test_loss_csv_logs_both_raw_and_scaled_for_every_term(cfg, redirected):
+    from src.experiments.train_pcim import LOSS_TERMS
+    tp, ckpt_dir, res_dir = redirected
+    tp.run(cfg, "t6", device="cpu", resume=False, smoke=True, quiet=True)
+    losses = pd.read_csv(res_dir / "t6_losses.csv")
+    for k in LOSS_TERMS:
+        assert f"{k}_raw" in losses.columns
+        assert f"{k}_scaled" in losses.columns

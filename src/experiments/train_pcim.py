@@ -21,9 +21,27 @@ apples-to-apples comparison.
 
 Per-step losses go to a CSV (results/<run>_losses.csv), not stdout - only a
 compact one-line status prints, every `log_every` steps. Held-out evaluation
-(relative DRR, DRemR, PSNR on normal regions) runs every `eval_every` steps
-against a FIXED set of eval examples built once at startup, logged to a
-second CSV (results/<run>_eval.csv).
+(relative DRR - overall AND broken out per anomaly kind, since an aggregate
+hides exactly the scratch case that matters most - DRemR, PSNR on normal
+regions) runs every `eval_every` steps against a FIXED set of eval examples
+built once at startup, logged to a second CSV (results/<run>_eval.csv).
+
+Loss normalisation (loss.normalize in the config, default on): L_freq's raw
+magnitude runs 1-2 orders of magnitude above the other three terms (FFT-
+magnitude L1 is dominated by a handful of low-frequency bins), which would
+otherwise make an "8-hour CPU run" mostly optimise spectral fidelity and
+tell you nothing about whether L_pres does anything. On the first real
+training batch, each term's raw magnitude is measured and a per-term scale
+factor (1/raw) is computed so every term starts at the same order of
+magnitude; the configured w_rec/w_deg/w_freq/w_pres weights are applied ON
+TOP of that common baseline, so they control genuine relative importance
+rather than fighting a magnitude imbalance they didn't cause. Both the raw
+and scaled value of every term are logged (rec_raw/rec_scaled/... columns)
+so the balance is visible, not just asserted. The computed scale factors
+are stored in the checkpoint - a resumed run reuses them rather than
+recalibrating from whatever batch it happens to resume on, which would
+otherwise make the loss scale (and therefore the effective learning rate
+per term) drift depending on where a run was interrupted.
 
     python -m src.experiments.train_pcim --config configs/train_pcim_cpu.yaml --smoke
     python -m src.experiments.train_pcim --config configs/train_pcim_cpu.yaml
@@ -44,7 +62,7 @@ import torch
 
 from src.data.mvtec import load_train_normals, synthetic_split
 from src.dbde.estimator import DegradationEstimate, estimate
-from src.degrade.anomaly import TextureBank, paste_anomaly
+from src.degrade.anomaly import ANOMALY_KINDS, TextureBank, paste_anomaly
 from src.degrade.simulator import degrade_pair
 from src.metrics.core import defect_retention_ratio, degradation_removal_ratio, psnr, relative_drr
 from src.models.losses import (
@@ -155,7 +173,11 @@ def _restore_both(model: PCIM, ex: Example, device: str):
 # losses / eval
 # --------------------------------------------------------------------------
 
-def compute_step_losses(model: PCIM, ex: Example, cfg: dict, device: str) -> dict[str, torch.Tensor]:
+def compute_raw_losses(model: PCIM, ex: Example, device: str) -> dict[str, torch.Tensor]:
+    """The four RAW, un-weighted, un-normalised loss components. Combining
+    them into a training objective (weighting + normalisation) is a
+    separate step - see calibrate_scale_factors() / weighted_total() -
+    so the raw magnitudes stay inspectable on their own."""
     x_full_a, _, x_full_0, _, illum, kernel, y_a, y_0 = _restore_both(model, ex, device)
     x_a_t = _img_to_tensor(ex.x_a, device)
     x_0_t = _img_to_tensor(ex.x0, device)
@@ -167,18 +189,53 @@ def compute_step_losses(model: PCIM, ex: Example, cfg: dict, device: str) -> dic
     l_freq = 0.5 * (frequency_loss(x_full_a, x_a_t) + frequency_loss(x_full_0, x_0_t))
     l_pres = preservation_loss(x_full_a, x_full_0, x_a_t, x_0_t, mask_t)
 
+    return dict(rec=l_rec, deg=l_deg, freq=l_freq, pres=l_pres)
+
+
+LOSS_TERMS = ("rec", "deg", "freq", "pres")
+
+
+@torch.no_grad()
+def calibrate_scale_factors(model: PCIM, examples: list[Example], cfg: dict,
+                            device: str) -> dict[str, float]:
+    """Measure each term's mean raw magnitude over `examples` (the first
+    real training batch) and return per-term scale factors (1/raw) so every
+    term starts at the same order of magnitude. Returns all-1.0 (a no-op)
+    if loss.normalize is set False in the config."""
+    if not bool(cfg["loss"].get("normalize", True)):
+        return {k: 1.0 for k in LOSS_TERMS}
+
+    sums = {k: 0.0 for k in LOSS_TERMS}
+    for ex in examples:
+        raw = compute_raw_losses(model, ex, device)
+        for k in LOSS_TERMS:
+            sums[k] += float(raw[k]) / len(examples)
+    return {k: 1.0 / max(sums[k], EPS) for k in LOSS_TERMS}
+
+
+def weighted_total(raw: dict[str, torch.Tensor], scale_factors: dict[str, float],
+                   cfg: dict) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Apply scale factors then the configured relative weights. Returns
+    (total, scaled) where `scaled` holds each term post-normalisation,
+    pre-weighting - what gets logged alongside the raw values."""
+    scaled = {k: raw[k] * scale_factors[k] for k in LOSS_TERMS}
     w = cfg["loss"]
     use_lpres = bool(w.get("use_lpres", True))
-    total = w["w_rec"] * l_rec + w["w_deg"] * l_deg + w["w_freq"] * l_freq
-    total = total + (w["w_pres"] * l_pres if use_lpres else 0.0 * l_pres)
-
-    return dict(total=total, rec=l_rec, deg=l_deg, freq=l_freq, pres=l_pres)
+    total = w["w_rec"] * scaled["rec"] + w["w_deg"] * scaled["deg"] + w["w_freq"] * scaled["freq"]
+    total = total + (w["w_pres"] * scaled["pres"] if use_lpres else 0.0 * scaled["pres"])
+    return total, scaled
 
 
 @torch.no_grad()
 def evaluate(model: PCIM, eval_set: list[Example], device: str) -> dict[str, float]:
+    """Relative DRR is reported overall AND broken out per anomaly kind -
+    scratches are the case that decides this project, and they're exactly
+    what an aggregate mean would hide if they behaved worse than blobs/
+    texture. rel_drr_by_kind[k] is nan if the eval set has no examples of
+    kind k with a finite relative DRR."""
     model.eval()
     rel_drrs, dremrs, psnrs = [], [], []
+    rel_drrs_by_kind: dict[str, list[float]] = {k: [] for k in ANOMALY_KINDS}
     for ex in eval_set:
         x_full_a, _, x_full_0, _, _, _, _, _ = _restore_both(model, ex, device)
         r_a = x_full_a.squeeze(0).clamp(0, 1).cpu().numpy().transpose(1, 2, 0)
@@ -189,6 +246,7 @@ def evaluate(model: PCIM, eval_set: list[Example], device: str) -> dict[str, flo
         rel = relative_drr(drr_method, drr_id)
         if np.isfinite(rel):
             rel_drrs.append(rel)
+            rel_drrs_by_kind.setdefault(ex.kind, []).append(rel)
 
         dremr = degradation_removal_ratio(r_a, ex.y_a, ex.x_a, ex.mask)
         if np.isfinite(dremr):
@@ -199,12 +257,15 @@ def evaluate(model: PCIM, eval_set: list[Example], device: str) -> dict[str, flo
             psnrs.append(p)
 
     model.train()
-    return dict(
+    out = dict(
         relative_drr=float(np.mean(rel_drrs)) if rel_drrs else float("nan"),
         dremr=float(np.mean(dremrs)) if dremrs else float("nan"),
         psnr_normal=float(np.mean(psnrs)) if psnrs else float("nan"),
         n=len(eval_set),
     )
+    for kind, vals in rel_drrs_by_kind.items():
+        out[f"relative_drr_{kind}"] = float(np.mean(vals)) if vals else float("nan")
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -216,7 +277,8 @@ def checkpoint_path(run_name: str) -> Path:
 
 
 def save_checkpoint(run_name: str, model: PCIM, optimizer: torch.optim.Optimizer,
-                    step: int, rng: np.random.Generator, cfg: dict) -> None:
+                    step: int, rng: np.random.Generator, cfg: dict,
+                    scale_factors: dict[str, float] | None) -> None:
     path = checkpoint_path(run_name)
     tmp = path.with_suffix(".pt.tmp")
     torch.save(dict(
@@ -225,21 +287,27 @@ def save_checkpoint(run_name: str, model: PCIM, optimizer: torch.optim.Optimizer
         optimizer=optimizer.state_dict(),
         rng_state=rng.bit_generator.state,
         config=cfg,
+        scale_factors=scale_factors,
     ), tmp)
     tmp.replace(path)  # atomic on POSIX and Windows - never leaves a half-written checkpoint
 
 
 def load_checkpoint(run_name: str, model: PCIM, optimizer: torch.optim.Optimizer,
-                    rng: np.random.Generator, device: str) -> int:
-    """Returns the resumed step count (0 if no checkpoint exists)."""
+                    rng: np.random.Generator, device: str) -> tuple[int, dict[str, float] | None]:
+    """Returns (resumed step count, scale_factors) - (0, None) if no
+    checkpoint exists. Reusing the checkpoint's scale_factors rather than
+    recalibrating on resume matters: recalibrating from whatever batch a
+    run happens to resume on would make the loss scale (and therefore each
+    term's effective learning rate) drift depending on where the run was
+    interrupted, rather than being fixed once by the first real batch."""
     path = checkpoint_path(run_name)
     if not path.exists():
-        return 0
+        return 0, None
     ckpt = torch.load(path, map_location=device)
     model.load_state_dict(ckpt["model"])
     optimizer.load_state_dict(ckpt["optimizer"])
     rng.bit_generator.state = ckpt["rng_state"]
-    return int(ckpt["step"])
+    return int(ckpt["step"]), ckpt.get("scale_factors")
 
 
 # --------------------------------------------------------------------------
@@ -294,7 +362,7 @@ def run(cfg: dict, run_name: str, device: str | None = None,
     optimizer = torch.optim.Adam(model.parameters(), lr=cfg["train"]["lr"])
 
     rng = np.random.default_rng(seed)
-    step = load_checkpoint(run_name, model, optimizer, rng, device) if resume else 0
+    step, scale_factors = load_checkpoint(run_name, model, optimizer, rng, device) if resume else (0, None)
 
     eval_set = build_eval_set(cfg, pools, bank)  # rebuilt identically every run (own seed)
 
@@ -304,30 +372,52 @@ def run(cfg: dict, run_name: str, device: str | None = None,
     eval_every = cfg["train"]["eval_every"]
     batch_size = cfg["train"]["batch_size"]
 
-    loss_csv = CsvLogger(results_dir() / f"{run_name}_losses.csv",
-                         ["step", "total", "rec", "deg", "freq", "pres", "elapsed_s"])
-    eval_csv = CsvLogger(results_dir() / f"{run_name}_eval.csv",
-                         ["step", "relative_drr", "dremr", "psnr_normal", "n"])
+    loss_fields = ["step", "total", "elapsed_s"]
+    for k in LOSS_TERMS:
+        loss_fields += [f"{k}_raw", f"{k}_scaled"]
+    loss_csv = CsvLogger(results_dir() / f"{run_name}_losses.csv", loss_fields)
+    eval_fields = ["step", "relative_drr", "dremr", "psnr_normal", "n"]
+    eval_fields += [f"relative_drr_{k}" for k in ANOMALY_KINDS]
+    eval_csv = CsvLogger(results_dir() / f"{run_name}_eval.csv", eval_fields)
 
     t0 = time.time()
     last_eval = None
     try:
         while step < total_steps:
             optimizer.zero_grad()
-            sums = dict(total=0.0, rec=0.0, deg=0.0, freq=0.0, pres=0.0)
-            for _ in range(batch_size):
-                ex = _sample_example(rng, pools, cfg, bank)
-                losses = compute_step_losses(model, ex, cfg, device)
-                (losses["total"] / batch_size).backward()
-                for k in sums:
-                    sums[k] += float(losses[k].detach()) / batch_size
+            examples = [_sample_example(rng, pools, cfg, bank) for _ in range(batch_size)]
+
+            if scale_factors is None:
+                # First real training batch of a fresh run: calibrate once,
+                # from exactly the batch about to be trained on. Cheap
+                # (no_grad, discarded) - the real forward pass below is
+                # what actually gets a gradient.
+                scale_factors = calibrate_scale_factors(model, examples, cfg, device)
+                if not quiet:
+                    print(f"[{run_name}] loss scale factors (calibrated at step {step + 1}): "
+                          f"{ {k: round(v, 4) for k, v in scale_factors.items()} }", flush=True)
+
+            sums = {"total": 0.0}
+            for k in LOSS_TERMS:
+                sums[f"{k}_raw"] = 0.0
+                sums[f"{k}_scaled"] = 0.0
+
+            for ex in examples:
+                raw = compute_raw_losses(model, ex, device)
+                total, scaled = weighted_total(raw, scale_factors, cfg)
+                (total / batch_size).backward()
+                sums["total"] += float(total.detach()) / batch_size
+                for k in LOSS_TERMS:
+                    sums[f"{k}_raw"] += float(raw[k].detach()) / batch_size
+                    sums[f"{k}_scaled"] += float(scaled[k].detach()) / batch_size
+
             optimizer.step()
             step += 1
 
             loss_csv.write(dict(step=step, elapsed_s=round(time.time() - t0, 2), **sums))
 
             if step % ckpt_every == 0 or step == total_steps:
-                save_checkpoint(run_name, model, optimizer, step, rng, cfg)
+                save_checkpoint(run_name, model, optimizer, step, rng, cfg, scale_factors)
 
             if step % eval_every == 0 or step == total_steps:
                 last_eval = evaluate(model, eval_set, device)
@@ -343,7 +433,7 @@ def run(cfg: dict, run_name: str, device: str | None = None,
         loss_csv.close()
         eval_csv.close()
 
-    save_checkpoint(run_name, model, optimizer, step, rng, cfg)  # final state, always
+    save_checkpoint(run_name, model, optimizer, step, rng, cfg, scale_factors)  # final state, always
     return last_eval if last_eval is not None else evaluate(model, eval_set, device)
 
 
