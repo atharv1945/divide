@@ -28,6 +28,10 @@ rm -f checkpoints/smoke_ablate_lpres_on.pt checkpoints/smoke_ablate_lpres_off.pt
 python -m src.experiments.ablate_lpres --config configs/train_pcim_cpu.yaml \
     --smoke --run-prefix smoke_ablate
 echo
+echo "== DBDE validation figures (smoke) =="
+python -m src.experiments.dbde_validation --smoke --categories carpet bottle \
+    --n-per-category 3
+echo
 echo "== gradio demo (construction only, no server) =="
 python -c "from src.demo.app import build_demo; build_demo(); print('  demo builds OK')"
 echo
