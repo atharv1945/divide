@@ -6,4 +6,7 @@ checkpoints/
 *.pth
 *.ckpt
 .DS_Store
-.venv/
+venv/
+mvtec/
+dtd/
+
