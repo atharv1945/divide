@@ -10,6 +10,11 @@ python -m src.experiments.drr_study --smoke --n-images 4 \
     --families defocus noise --severities 3 \
     --restorers identity gaussian nlm clahe wiener --tag smoke
 echo
+echo "== eval grid (smoke) =="
+python -m src.experiments.eval_grid --smoke --detectors padim \
+    --restorers identity gaussian --families noise --severities 3 \
+    --n-train 6 --n-test 4 --categories carpet --tag smoke_eval_grid
+echo
 echo "== deep restorer registry (fail-loud check, no weights present) =="
 python -c "
 from src.models.restorers import get_restorer, DEEP_SPECS
