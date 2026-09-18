@@ -67,6 +67,25 @@ def test_make_figures_write_files(tmp_path):
     assert "blur_radius" in d2
 
     p3 = tmp_path / "ref_vs_blind.png"
-    d3 = make_reference_vs_blind_figure(imgs, p3, seed=0)
+    by_cat = {"carpet": imgs[:5], "bottle": imgs[5:] if len(imgs) > 5 else imgs[:4]}
+    d3 = make_reference_vs_blind_figure(by_cat, p3, seed=0)
     assert p3.exists() and p3.stat().st_size > 0
     assert "relative_error_reduction" in d3
+
+
+def test_reference_vs_blind_figure_requires_same_category_images_per_group():
+    """A category with fewer than 4 images is skipped, not silently mixed
+    with another category's images to make up the count."""
+    imgs_a = _images(n=8, size=64)
+    by_cat = {"carpet": imgs_a[:2], "bottle": imgs_a[2:8]}  # carpet has only 2
+    import tempfile
+    from pathlib import Path
+    with tempfile.TemporaryDirectory() as td:
+        d = make_reference_vs_blind_figure(by_cat, Path(td) / "out.png", seed=0)
+    assert "carpet" not in d["per_category"]
+    assert "bottle" in d["per_category"]
+
+
+def test_reference_vs_blind_figure_raises_when_no_category_qualifies():
+    with pytest.raises(ValueError, match="no category"):
+        make_reference_vs_blind_figure({"carpet": _images(n=2, size=64)[:2]}, "unused.png", seed=0)

@@ -205,6 +205,14 @@ def make_parameter_accuracy_figure(images: list[np.ndarray], out_path, seed: int
 # --------------------------------------------------------------------------
 
 def reference_vs_blind_data(images: list[np.ndarray], seed: int) -> dict[str, list[float]]:
+    """`images` must all be from the SAME category. reference_psd() only
+    means what it claims to mean - "the clean spectral content of THIS
+    part" - if the reference images and test images share a texture
+    distribution; mixing categories here silently turns this into a
+    meaningless comparison (caught during development: an early version
+    pooled categories together and got a reference mode that looked wildly
+    WORSE than blind, which was really just "the reference PSD is for the
+    wrong part," not a real result about the method)."""
     if len(images) < 4:
         raise ValueError("need at least 4 images: some held out for the reference PSD")
     ref_images, test_images = images[:3], images[3:]
@@ -226,18 +234,33 @@ def reference_vs_blind_data(images: list[np.ndarray], seed: int) -> dict[str, li
     return dict(radii=radii, reference_mae=ref_errs, blind_mae=blind_errs)
 
 
-def make_reference_vs_blind_figure(images: list[np.ndarray], out_path, seed: int = 0):
+def make_reference_vs_blind_figure(images_by_category: dict[str, list[np.ndarray]],
+                                   out_path, seed: int = 0):
+    """Runs reference_vs_blind_data() separately per category (each
+    category's own images provide both its reference and its test set -
+    see that function's docstring for why cross-category pooling would
+    invalidate the comparison) and averages the per-radius MAE across
+    categories."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    data = reference_vs_blind_data(images, seed)
+    per_cat = {cat: reference_vs_blind_data(imgs, seed)
+              for cat, imgs in images_by_category.items() if len(imgs) >= 4}
+    if not per_cat:
+        raise ValueError("no category had >=4 images for the reference-vs-blind comparison")
+
+    radii = next(iter(per_cat.values()))["radii"]
+    ref_mae = np.mean([d["reference_mae"] for d in per_cat.values()], axis=0).tolist()
+    blind_mae = np.mean([d["blind_mae"] for d in per_cat.values()], axis=0).tolist()
+    data = dict(radii=radii, reference_mae=ref_mae, blind_mae=blind_mae,
+               per_category=per_cat)
 
     fig, ax = plt.subplots(figsize=(6.5, 4.5), dpi=150)
-    ax.plot(data["radii"], data["reference_mae"], marker="o", label="reference-based")
-    ax.plot(data["radii"], data["blind_mae"], marker="s", label="blind")
+    ax.plot(radii, ref_mae, marker="o", label="reference-based")
+    ax.plot(radii, blind_mae, marker="s", label="blind")
     ax.set_xlabel("true defocus radius (px)")
-    ax.set_ylabel("mean absolute error (px)")
+    ax.set_ylabel("mean absolute error (px), averaged across categories")
     ax.set_title("Reference PSD vs. blind defocus estimation")
     ax.legend()
     ax.grid(alpha=0.3)
@@ -245,8 +268,8 @@ def make_reference_vs_blind_figure(images: list[np.ndarray], out_path, seed: int
     fig.savefig(out_path)
     plt.close(fig)
 
-    mean_ref = float(np.mean(data["reference_mae"]))
-    mean_blind = float(np.mean(data["blind_mae"]))
+    mean_ref = float(np.mean(ref_mae))
+    mean_blind = float(np.mean(blind_mae))
     gain = (mean_blind - mean_ref) / mean_blind if mean_blind > 1e-8 else float("nan")
     data["mean_reference_mae"] = mean_ref
     data["mean_blind_mae"] = mean_blind
@@ -277,8 +300,16 @@ def main() -> int:
         args.n_per_category = min(args.n_per_category, 4)
         args.size = min(args.size, 96)
 
-    images = _pool_images(args.categories, args.n_per_category, args.size,
-                          args.smoke, args.seed)
+    images_by_category = {
+        cat: load_train_normals(cat, size=args.size, limit=args.n_per_category, smoke=args.smoke)
+        for cat in args.categories
+    }
+    images = [im for imgs in images_by_category.values() for im in imgs]
+    if not images:
+        print("no images loaded - check DIVIDE_DATA_ROOT or pass --smoke", file=sys.stderr)
+        return 1
+    rng = np.random.default_rng(args.seed)
+    rng.shuffle(images)
     print(f"loaded {len(images)} images from {args.categories}")
 
     figs = figures_dir()
@@ -290,8 +321,9 @@ def main() -> int:
     print("parameter accuracy...")
     d2 = make_parameter_accuracy_figure(images, figs / "dbde_parameter_accuracy.png", args.seed)
 
-    print("reference vs. blind...")
-    d3 = make_reference_vs_blind_figure(images, figs / "dbde_reference_vs_blind.png", args.seed)
+    print("reference vs. blind (per-category, averaged)...")
+    d3 = make_reference_vs_blind_figure(images_by_category,
+                                        figs / "dbde_reference_vs_blind.png", args.seed)
     print(f"  mean MAE: reference={d3['mean_reference_mae']:.3f}px  "
           f"blind={d3['mean_blind_mae']:.3f}px  "
           f"relative error reduction={d3['relative_error_reduction']:.1%}")
