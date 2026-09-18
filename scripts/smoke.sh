@@ -15,6 +15,9 @@ python -m src.experiments.eval_grid --smoke --detectors padim \
     --restorers identity gaussian --families noise --severities 3 \
     --n-train 6 --n-test 4 --categories carpet --tag smoke_eval_grid
 echo
+echo "== gradio demo (construction only, no server) =="
+python -c "from src.demo.app import build_demo; build_demo(); print('  demo builds OK')"
+echo
 echo "== deep restorer registry (fail-loud check, no weights present) =="
 python -c "
 from src.models.restorers import get_restorer, DEEP_SPECS

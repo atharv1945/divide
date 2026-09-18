@@ -75,3 +75,21 @@ def test_unknown_deep_restorer_name_raises_keyerror():
     from src.models.deep_restorers import build_deep_restorer
     with pytest.raises(KeyError):
         build_deep_restorer("not_a_real_model")
+
+
+# ---------------------------------------------------------------- divide itself
+
+def test_divide_restorer_without_checkpoint_fails_loudly():
+    from src.models.divide_restorer import PCIM_WEIGHTS
+    r = get_restorer("divide")
+    assert r.tier == "deep"
+    with pytest.raises(RuntimeError) as exc:
+        r(_img())
+    msg = str(exc.value)
+    assert PCIM_WEIGHTS in msg
+    assert "no training script has been written" in msg.lower()
+
+
+def test_divide_is_listed_in_available_restorers():
+    assert "divide" in available_restorers(include_deep=True)
+    assert "divide" not in available_restorers(include_deep=False)

@@ -236,17 +236,20 @@ CLASSICAL: dict[str, Callable] = {
 def get_restorer(name: str) -> Restorer:
     if name in CLASSICAL:
         return Restorer(name, CLASSICAL[name], tier="classical")
+    if name == "divide":
+        from src.models.divide_restorer import build_divide_restorer
+        return build_divide_restorer()
     deep = load_deep(name)
     if deep is not None:
         return deep
     raise KeyError(
         f"unknown restorer {name!r}. "
-        f"classical: {sorted(CLASSICAL)} | deep: {sorted(DEEP_SPECS)}"
+        f"classical: {sorted(CLASSICAL)} | deep: {sorted(DEEP_SPECS)} | divide"
     )
 
 
 def available_restorers(include_deep: bool = False) -> list[str]:
     names = sorted(CLASSICAL)
     if include_deep:
-        names += sorted(DEEP_SPECS)
+        names += sorted(DEEP_SPECS) + ["divide"]
     return names
