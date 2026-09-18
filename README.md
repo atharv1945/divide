@@ -27,15 +27,19 @@ a normal one. Defect preservation becomes structural rather than hoped-for.
 |---|---|
 | Degradation simulator (5 families × 5 severities + mixed) | done, tested |
 | Synthetic anomaly generator (texture / scratch / blob) | done, tested |
-| Metrics: DRR, relative DRR, ACG, HDR, DRemR, AUROC, AP, F1 | done, tested |
+| Metrics: DRR, relative DRR, ACG, HDR, DRemR, AUROC, AP, F1, gap_closed | done, tested |
 | DBDE — defect-blind degradation estimator | done, tested |
 | DRR go/no-go study + figures | done, runs on CPU |
-| PCIM — physics-consistent inverse module | **not built** |
-| SARG — sparse anomaly-residual guard | **not built** |
-| Frozen-detector evaluation grid | **not built** |
-| Gradio demo | **not built** |
+| Frozen-detector harness (PatchCore/PaDiM/ReverseDistillation/EfficientAd) | built, PaDiM verified on CPU; others fit+scored at least once but flaky in dev sandbox — **never run on real MVTec or a GPU** |
+| Deep restorer loaders (NAFNet/Restormer/DiffBIR) | built, fail-loud path tested; **restoration itself never run — no weights, no GPU** |
+| PCIM — physics-consistent inverse module | built, tested (incl. the structural content-agnostic claim); **never trained** |
+| Losses — L_rec / L_deg / L_freq / L_pres | built, tested against the real counterfactual pipeline |
+| SARG — sparse anomaly-residual guard | built, tested; **never trained** |
+| PCIM/SARG training script | **not written** — see HANDOFF.md step 5 |
+| Frozen-detector evaluation grid (resumable, CSV) | built, verified end-to-end on synthetic data; **never run on real MVTec** |
+| Gradio demo | built, panel logic + Blocks construction verified; **never run against real weights** |
 
-133 unit tests, all passing, all CPU.
+225 unit tests, all passing, all CPU. **Read [HANDOFF.md](HANDOFF.md) before running anything on a GPU** — it has the exact run order, every weight URL, and what "verified" does and doesn't mean for each piece above.
 
 ---
 
@@ -115,14 +119,15 @@ Everything above is CPU. These need a GPU:
 
 | Job | Cost | Notes |
 |---|---|---|
-| Deep restorers in the DRR study | ~2–3 GPU-h | needs weights, see `DEEP_SPECS` |
-| PatchCore baseline on MVTec | ~1 GPU-h | via `anomalib` |
-| PCIM training | ~3–4 GPU-h | <2M params |
-| Full evaluation grid | ~10–15 GPU-h | embarrassingly parallel, resumable |
+| Deep restorers in the DRR study | ~1–2 GPU-h | needs weights (Google Drive for NAFNet/Restormer, manual download — see HANDOFF.md); loaders never executed |
+| Frozen-detector harness on real MVTec | ~1 GPU-h | PaDiM verified on CPU/synthetic only; PatchCore/ReverseDistillation/EfficientAd built but never run on a GPU or real data |
+| PCIM + SARG training | not estimable yet | **training script doesn't exist** — see HANDOFF.md step 5 |
+| Full evaluation grid | ~10–15 GPU-h, floor not ceiling | resumable (`eval_grid.py`), embarrassingly parallel across cells but not yet parallelized in code |
 
 **Before any GPU session, run `./scripts/smoke.sh` and confirm `ALL GREEN`.**
 Debugging on borrowed hardware while someone waits is the worst way to spend
-that favour.
+that favour. **Then read [HANDOFF.md](HANDOFF.md)** — it has the actual run
+order, the go/no-go stop, and exactly what's verified vs. never run.
 
 ### Kaggle
 
@@ -154,10 +159,19 @@ src/degrade/simulator.py degradation families, severities, counterfactual pairs
 src/degrade/anomaly.py   synthetic anomaly generation
 src/dbde/estimator.py    defect-blind degradation estimator (pure DIP, no GPU)
 src/metrics/core.py      DRR / ACG / HDR / DRemR / AUROC — unit-tested
-src/models/restorers.py  classical + deep restoration baselines
+src/models/restorers.py  classical restorer registry + get_restorer()/available_restorers()
+src/models/deep_restorers.py  NAFNet/Restormer/DiffBIR loaders — clone repo, fail loud if weights missing
+src/models/divide_restorer.py DIVIDE itself as a Restorer (DBDE -> PCIM -> optional SARG)
+src/models/pcim.py       Physics-Consistent Inverse Module (PyTorch)
+src/models/losses.py     L_rec, L_deg, L_freq, L_pres
+src/models/sarg.py       Sparse Anomaly-Residual Guard (unrolled RPCA)
+src/detect/harness.py    frozen-detector harness (anomalib: PatchCore/PaDiM/ReverseDistillation/EfficientAd)
+src/detect/_compat.py    runtime shims anomalib needs on a current stack — read before touching anomalib imports
 src/data/mvtec.py        MVTec loading, with synthetic smoke fallback
-src/experiments/         study scripts
-tests/                   133 tests, CPU only
+src/demo/app.py          Gradio demo — four panels, live relative-DRR readout
+src/experiments/         study scripts (drr_study.py, eval_grid.py)
+tests/                   225 tests, CPU only
+HANDOFF.md               read this before running anything on a GPU
 ```
 
 ---
