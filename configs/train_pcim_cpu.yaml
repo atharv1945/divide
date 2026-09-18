@@ -1,9 +1,10 @@
 # Overnight CPU run. 128x128, small batch - see HANDOFF.md for the exact
-# command and how to check progress. Step count is sized from measured
-# per-step wall-clock on this machine (src.experiments.train_pcim --smoke
-# timing, scaled to 128x128) for roughly an 8-hour run; if you're on
-# noticeably faster/slower hardware, scale `train.steps` accordingly rather
-# than trusting this number literally.
+# command and how to check progress. `train.steps` is calibrated from an
+# actual measured per-step cost on this machine (~1.87s/step at batch_size
+# 4, 128x128, via src.experiments.train_pcim.run() timed over 59 real
+# non-smoke steps using the logged elapsed_s column - not a guess, but also
+# not universal: if you're on noticeably faster/slower hardware, re-time a
+# short run and scale `train.steps` accordingly.
 seed: 0
 
 data:
@@ -37,10 +38,10 @@ loss:
 train:
   lr: 0.0002
   batch_size: 4
-  steps: 6000
-  log_every: 25
-  checkpoint_every: 100
-  eval_every: 250
+  steps: 15000
+  log_every: 50
+  checkpoint_every: 150
+  eval_every: 375
 
 eval:
   seed: 12345

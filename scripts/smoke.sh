@@ -30,7 +30,7 @@ python -m src.experiments.ablate_lpres --config configs/train_pcim_cpu.yaml \
 echo
 echo "== DBDE validation figures (smoke) =="
 python -m src.experiments.dbde_validation --smoke --categories carpet bottle \
-    --n-per-category 3
+    --n-per-category 4
 echo
 echo "== gradio demo (construction only, no server) =="
 python -c "from src.demo.app import build_demo; build_demo(); print('  demo builds OK')"

@@ -28,18 +28,19 @@ a normal one. Defect preservation becomes structural rather than hoped-for.
 | Degradation simulator (5 families × 5 severities + mixed) | done, tested |
 | Synthetic anomaly generator (texture / scratch / blob) | done, tested |
 | Metrics: DRR, relative DRR, ACG, HDR, DRemR, AUROC, AP, F1, gap_closed | done, tested |
-| DBDE — defect-blind degradation estimator | done, tested |
-| DRR go/no-go study + figures | done, runs on CPU |
+| DBDE — defect-blind degradation estimator | done, tested, **validated on real MVTec** — see `figures/dbde_*.png` |
+| DRR go/no-go study + figures | done, runs on CPU; **full classical-restorer run on real MVTec done** (`results/drr_study_real*.csv`) — not the verdict, a baseline |
 | Frozen-detector harness (PatchCore/PaDiM/ReverseDistillation/EfficientAd) | built, PaDiM verified on CPU; others fit+scored at least once but flaky in dev sandbox — **never run on real MVTec or a GPU** |
 | Deep restorer loaders (NAFNet/Restormer/DiffBIR) | built, fail-loud path tested; **restoration itself never run — no weights, no GPU** |
 | PCIM — physics-consistent inverse module | built, tested (incl. the structural content-agnostic claim); **never trained** |
 | Losses — L_rec / L_deg / L_freq / L_pres | built, tested against the real counterfactual pipeline |
 | SARG — sparse anomaly-residual guard | built, tested; **never trained** |
-| PCIM/SARG training script | **not written** — see HANDOFF.md step 5 |
+| PCIM training script (resumable, CSV-logged) | built, tested incl. a real kill-and-resume check; **never run to convergence — no GPU** |
+| L_pres ablation harness | built, tested (incl. the fairness-assertion that both runs differ ONLY in `use_lpres`); **never run at meaningful scale** |
 | Frozen-detector evaluation grid (resumable, CSV) | built, verified end-to-end on synthetic data; **never run on real MVTec** |
 | Gradio demo | built, panel logic + Blocks construction verified; **never run against real weights** |
 
-225 unit tests, all passing, all CPU. **Read [HANDOFF.md](HANDOFF.md) before running anything on a GPU** — it has the exact run order, every weight URL, and what "verified" does and doesn't mean for each piece above.
+244+ unit tests, all passing, all CPU. **Read [HANDOFF.md](HANDOFF.md) before running anything on a GPU** — it has the exact run order, every weight URL, and what "verified" does and doesn't mean for each piece above.
 
 ---
 
@@ -169,7 +170,13 @@ src/detect/harness.py    frozen-detector harness (anomalib: PatchCore/PaDiM/Reve
 src/detect/_compat.py    runtime shims anomalib needs on a current stack — read before touching anomalib imports
 src/data/mvtec.py        MVTec loading, with synthetic smoke fallback
 src/demo/app.py          Gradio demo — four panels, live relative-DRR readout
-src/experiments/         study scripts (drr_study.py, eval_grid.py)
+src/experiments/drr_study.py       go/no-go experiment
+src/experiments/eval_grid.py       full frozen-detector evaluation grid
+src/experiments/train_pcim.py      PCIM training loop — config-driven, resumable
+src/experiments/ablate_lpres.py    trains WITH/WITHOUT L_pres, reports the relative-DRR delta
+src/experiments/dbde_validation.py defect-blindness / parameter-accuracy / reference-vs-blind figures
+configs/train_pcim_cpu.yaml        128x128 overnight-CPU-run config
+configs/train_pcim_gpu.yaml        256x256 GPU config
 tests/                   225 tests, CPU only
 HANDOFF.md               read this before running anything on a GPU
 ```
