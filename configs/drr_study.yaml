@@ -1,0 +1,23 @@
+# Week-2 go/no-go experiment.
+# Run this BEFORE building anything else.
+categories: [carpet, bottle, screw]
+restorers:
+  # classical (always available, no downloads)
+  - identity
+  - gaussian
+  - bilateral
+  - nlm
+  - clahe
+  - msrcr
+  - wiener
+  - classical_pipeline
+  # deep (need weights; see src/models/restorers.py DEEP_SPECS)
+  # - nafnet
+  # - restormer
+  # - promptir
+families: [defocus, motion, noise, illumination, mixed]
+severities: [1, 2, 3, 4, 5]
+kinds: [texture, scratch, blob]
+n_images: 20
+size: 256
+seed: 0

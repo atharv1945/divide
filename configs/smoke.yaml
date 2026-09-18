@@ -1,0 +1,9 @@
+# Tiny CPU-only configuration for verifying the pipeline with no dataset.
+categories: [carpet, bottle, screw]
+restorers: [identity, gaussian, nlm, clahe, wiener]
+families: [defocus, noise]
+severities: [3]
+kinds: [texture, scratch, blob]
+n_images: 4
+size: 128
+seed: 0

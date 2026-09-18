@@ -1,0 +1,473 @@
+"""DBDE - Defect-Blind Degradation Estimator.
+
+Pure classical image processing. No learned weights, no GPU. Every statistic
+used here is a *global aggregate*, which is what makes the estimator blind to
+spatially sparse defects: perturbing 1% of pixels perturbs the estimate by
+roughly 1%.
+
+  noise sigma   <- flat-patch PCA (smallest eigenvalue of patch covariance)
+  illumination  <- log-domain low-pass + robust low-order polynomial fit
+  blur kernel   <- cepstral peak analysis + radially-averaged PSD
+  compression   <- DCT coefficient histogram periodicity
+
+This module is the strongest "this really is a DIP project" artefact, and it
+is fully testable on CPU because we generate the ground truth ourselves.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import cv2
+import numpy as np
+
+EPS = 1e-8
+
+
+@dataclass
+class DegradationEstimate:
+    noise_sigma: float = 0.0
+    illum_field: np.ndarray | None = None     # (H,W) multiplicative field
+    illum_ev: float = 0.0
+    blur_kind: str = "none"                   # none | defocus | motion
+    blur_radius: float = 0.0
+    blur_length: float = 0.0
+    blur_angle: float = 0.0
+    jpeg_qf: int = 100
+
+    def kernel(self) -> np.ndarray:
+        from src.degrade.simulator import defocus_kernel, motion_kernel
+        if self.blur_kind == "defocus" and self.blur_radius > 0.3:
+            return defocus_kernel(self.blur_radius)
+        if self.blur_kind == "motion" and self.blur_length > 1.5:
+            return motion_kernel(self.blur_length, self.blur_angle)
+        k = np.zeros((3, 3), np.float32)
+        k[1, 1] = 1.0
+        return k
+
+
+def _gray(x: np.ndarray) -> np.ndarray:
+    x = np.asarray(x, np.float32)
+    return x.mean(axis=2) if x.ndim == 3 else x
+
+
+# --------------------------------------------------------------------------
+# 1. noise level  -  flat-patch PCA
+# --------------------------------------------------------------------------
+
+def estimate_noise_sigma(img: np.ndarray, patch: int = 8,
+                         flat_quantile: float = 0.25,
+                         max_patches: int = 20000) -> float:
+    """Smallest eigenvalue of the covariance of the flattest patches.
+
+    Defects are high-variance, so the flatness filter discards them. This is
+    the core of the estimator's defect-blindness.
+    """
+    g = _gray(img)
+    h, w = g.shape
+    if h < patch * 2 or w < patch * 2:
+        return float(np.std(g - cv2.GaussianBlur(g, (0, 0), 1.0)))
+
+    # dense-ish grid of patches
+    stride = max(patch // 2, 1)
+    ys = np.arange(0, h - patch + 1, stride)
+    xs = np.arange(0, w - patch + 1, stride)
+    if len(ys) * len(xs) > max_patches:
+        step = int(np.ceil(np.sqrt(len(ys) * len(xs) / max_patches)))
+        ys, xs = ys[::step], xs[::step]
+
+    patches = np.stack([g[y:y + patch, x:x + patch].ravel()
+                        for y in ys for x in xs], axis=0)
+    if patches.shape[0] < 16:
+        return float(np.std(g - cv2.GaussianBlur(g, (0, 0), 1.0)))
+
+    var = patches.var(axis=1)
+    keep = var <= np.quantile(var, flat_quantile)
+    flat = patches[keep]
+    if flat.shape[0] < 16:
+        flat = patches
+
+    flat = flat - flat.mean(axis=0, keepdims=True)
+    cov = (flat.T @ flat) / max(flat.shape[0] - 1, 1)
+    ev = np.linalg.eigvalsh(cov)
+    ev = ev[ev > 0]
+    if ev.size == 0:
+        return 0.0
+    # smallest eigenvalues are dominated by the noise floor
+    k = max(int(0.10 * ev.size), 1)
+    return float(np.sqrt(max(np.median(ev[:k]), 0.0)))
+
+
+# --------------------------------------------------------------------------
+# 2. illumination  -  log-domain low-pass + robust polynomial fit
+# --------------------------------------------------------------------------
+
+def _poly_design(h: int, w: int, degree: int) -> np.ndarray:
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    xn = (xx / max(w - 1, 1)) * 2 - 1
+    yn = (yy / max(h - 1, 1)) * 2 - 1
+    cols = []
+    for dy in range(degree + 1):
+        for dx in range(degree + 1 - dy):
+            cols.append((xn ** dx) * (yn ** dy))
+    return np.stack([c.ravel() for c in cols], axis=1)
+
+
+def estimate_illumination(img: np.ndarray, degree: int = 3,
+                          huber_iters: int = 6,
+                          prefilter: int = 5) -> tuple[np.ndarray, float]:
+    """Return (normalised multiplicative field L, relative EV of that field).
+
+    The fit is performed directly on the log image with iteratively reweighted
+    (Huber) least squares. An earlier version low-pass filtered first, which
+    was a mistake: a Gaussian smears a localised defect into a broad smooth
+    bump that the robust weights can no longer distinguish from genuine
+    illumination, so the defect gets absorbed into L. Fitting the raw log
+    image instead lets Huber see defect pixels as the sharp outliers they are
+    and downweight them, while the low polynomial degree still prevents the
+    surface from bending to fit local structure. A small median prefilter
+    removes sensor noise without spreading outliers.
+
+    L is normalised to unit geometric mean. The absolute exposure level is
+    deliberately NOT included: from a single image, scene albedo and
+    illumination gain are not separable, so any global factor here would be
+    arbitrary. The returned EV describes the spread of the field only.
+    """
+    g = _gray(img)
+    h, w = g.shape
+
+    if prefilter and prefilter >= 3:
+        k = int(prefilter) | 1
+        g = cv2.medianBlur((np.clip(g, 0, 1) * 255).astype(np.uint8), k).astype(np.float32) / 255.0
+
+    logg = np.log(np.clip(g, 1e-3, None))
+
+    A = _poly_design(h, w, degree)
+    b = logg.ravel()
+    wts = np.ones_like(b)
+    coef = np.zeros(A.shape[1], np.float32)
+    for _ in range(max(huber_iters, 1)):
+        Aw = A * wts[:, None]
+        coef, *_ = np.linalg.lstsq(Aw, b * wts, rcond=None)
+        r = b - A @ coef
+        s = 1.4826 * np.median(np.abs(r - np.median(r))) + EPS
+        delta = 1.0 * s
+        wts = np.where(np.abs(r) <= delta, 1.0, delta / (np.abs(r) + EPS))
+
+    fit = (A @ coef).reshape(h, w)
+    fit = fit - fit.mean()                      # unit geometric mean
+    L = np.clip(np.exp(fit), 0.2, 5.0).astype(np.float32)
+    ev = float((fit.max() - fit.min()) / np.log(2.0))
+    return L, ev
+
+
+def correct_illumination(img: np.ndarray, L: np.ndarray,
+                         ev: float = 0.0, clamp: float = 4.0,
+                         match_mean: float | None = None) -> np.ndarray:
+    """Divide out the spatial illumination field.
+
+    Only the *spatial* variation is corrected. `ev` is accepted for interface
+    compatibility but intentionally ignored, because the global exposure level
+    cannot be recovered from one image (see estimate_illumination). If a
+    reference brightness is known - and it is, since we hold clean normals for
+    every class - pass it as `match_mean` to restore the global level too.
+    """
+    x = np.asarray(img, np.float32)
+    field = np.clip(L, 1.0 / clamp, clamp)
+    if x.ndim == 3:
+        field = field[:, :, None]
+    out = x / field
+
+    if match_mean is not None:
+        m = float(out.mean())
+        if m > EPS:
+            out = out * (float(match_mean) / m)
+
+    return np.clip(out, 0.0, 1.0).astype(np.float32)
+
+
+# --------------------------------------------------------------------------
+# 3. blur  -  cepstrum + radially averaged PSD
+# --------------------------------------------------------------------------
+
+def _windowed_fft(g: np.ndarray) -> np.ndarray:
+    h, w = g.shape
+    wy = np.hanning(h).astype(np.float32)
+    wx = np.hanning(w).astype(np.float32)
+    win = np.outer(wy, wx)
+    return np.fft.fftshift(np.fft.fft2((g - g.mean()) * win))
+
+
+def radial_psd(img: np.ndarray, nbins: int = 128) -> tuple[np.ndarray, np.ndarray]:
+    """Radially averaged power spectral density. Returns (freq, power)."""
+    g = _gray(img)
+    F = _windowed_fft(g)
+    P = (np.abs(F) ** 2).astype(np.float64)
+    h, w = P.shape
+    cy, cx = h // 2, w // 2
+    yy, xx = np.mgrid[0:h, 0:w]
+    r = np.sqrt((yy - cy) ** 2 + (xx - cx) ** 2)
+    rmax = min(cy, cx)
+    bins = np.linspace(0, rmax, nbins + 1)
+    idx = np.digitize(r.ravel(), bins) - 1
+    valid = (idx >= 0) & (idx < nbins)
+    power = np.bincount(idx[valid], weights=P.ravel()[valid], minlength=nbins)
+    count = np.bincount(idx[valid], minlength=nbins).astype(np.float64)
+    power = power / np.maximum(count, 1)
+    freq = (bins[:-1] + bins[1:]) / 2 / max(rmax, 1)
+    return freq.astype(np.float32), power.astype(np.float32)
+
+
+def cepstrum(img: np.ndarray, signed: bool = True) -> np.ndarray:
+    """Cepstrum of the log-magnitude spectrum.
+
+    The SIGN matters: convolution by a finite-support kernel puts a
+    characteristic *negative* dip at the lag equal to the kernel extent.
+    Taking the magnitude (as is often done for display) destroys exactly the
+    feature we need, so `signed=True` is the default here.
+    """
+    g = _gray(img)
+    F = _windowed_fft(g)
+    logmag = np.log(np.abs(F) + 1.0)
+    c = np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(logmag)))
+    c = np.real(c) if signed else np.abs(c)
+    return c.astype(np.float32)
+
+
+def estimate_motion_blur(img: np.ndarray, max_len: int = 24,
+                         min_len: int = 6) -> tuple[float, float, float]:
+    """Return (length_px, angle_rad, confidence) from the signed cepstrum.
+
+    A linear motion kernel of length L makes |K(f)| vanish periodically, which
+    appears in the cepstrum as a negative dip at lag L and weaker echoes at
+    2L, 3L. We locate the strongest dip outside a DC exclusion disc and then
+    *confirm* it by checking for the first harmonic: a lone dip is usually the
+    image's own structure, whereas a dip plus its harmonic is blur. Lags below
+    `min_len` are not considered, since the DC lobe dominates there and a
+    sub-6px motion blur is in any case negligible.
+    """
+    c = cepstrum(img, signed=True)
+    h, w = c.shape
+    cy, cx = h // 2, w // 2
+
+    win = int(min(max_len, cy - 2, cx - 2))
+    if win < min_len + 2:
+        return 0.0, 0.0, 0.0
+
+    yy, xx = np.mgrid[-win:win + 1, -win:win + 1]
+    rad = np.sqrt(yy ** 2 + xx ** 2)
+    patch = c[cy - win:cy + win + 1, cx - win:cx + win + 1].copy()
+
+    valid = (rad >= min_len) & (rad <= win)
+    if not valid.any():
+        return 0.0, 0.0, 0.0
+
+    masked = np.where(valid, patch, np.inf)
+    k = int(np.argmin(masked))
+    py, px = np.unravel_index(k, masked.shape)
+    dy, dx = py - win, px - win
+    length = float(np.hypot(dy, dx))
+    angle = float(np.arctan2(dy, dx) % np.pi)
+    dip = float(patch[py, px])
+
+    bg = patch[valid]
+    med = float(np.median(bg))
+    mad = float(np.median(np.abs(bg - med))) + EPS
+    prominence = (med - dip) / (6.0 * mad)
+
+    # harmonic confirmation at 2x the lag, if it fits inside the window
+    harm = 0.0
+    hy, hx = int(round(2 * dy)), int(round(2 * dx))
+    if abs(hy) <= win and abs(hx) <= win:
+        neigh = patch[max(hy + win - 1, 0):hy + win + 2,
+                      max(hx + win - 1, 0):hx + win + 2]
+        if neigh.size:
+            harm = float(np.clip((med - neigh.min()) / (6.0 * mad), 0.0, 1.0))
+
+    conf = float(np.clip(0.65 * np.clip(prominence, 0, 1) + 0.35 * harm, 0.0, 1.0))
+    return length, angle, conf
+
+
+def _radial_mtf(kernel: np.ndarray, freq: np.ndarray, n: int = 256) -> np.ndarray:
+    """Radial profile of |FFT(kernel)| sampled at the given normalised freqs."""
+    K = np.abs(np.fft.fftshift(np.fft.fft2(kernel, s=(n, n))))
+    c = n // 2
+    yy, xx = np.mgrid[0:n, 0:n]
+    r = np.sqrt((yy - c) ** 2 + (xx - c) ** 2) / c
+    nb = len(freq)
+    edges = np.linspace(0, 1, nb + 1)
+    idx = np.digitize(r.ravel(), edges) - 1
+    ok = (idx >= 0) & (idx < nb)
+    tot = np.bincount(idx[ok], weights=K.ravel()[ok], minlength=nb)
+    cnt = np.bincount(idx[ok], minlength=nb).astype(np.float64)
+    prof = tot / np.maximum(cnt, 1)
+    return np.maximum(prof, EPS)
+
+
+def reference_psd(images: list[np.ndarray], nbins: int = 128) -> np.ndarray:
+    """Mean log-PSD over a set of CLEAN images of one class.
+
+    Industrial inspection has a structural advantage over generic blind
+    restoration: defect-free reference images of the exact part are always
+    available, because that is what the detector was fitted on. Storing their
+    average spectrum turns blind blur estimation into a far easier reference-
+    based problem. Compute this once per category and cache it.
+    """
+    acc = None
+    for im in images:
+        _, pw = radial_psd(im, nbins=nbins)
+        lp = np.log(np.maximum(pw, EPS))
+        acc = lp if acc is None else acc + lp
+    if acc is None:
+        raise ValueError("reference_psd needs at least one image")
+    return (acc / len(images)).astype(np.float32)
+
+
+def estimate_defocus_radius(img: np.ndarray, max_radius: float = 8.0,
+                            step: float = 0.25,
+                            ref_logpsd: np.ndarray | None = None
+                            ) -> tuple[float, float]:
+    """Estimate disc radius by fitting the PSD roll-off.
+
+    Two modes:
+
+    reference-based (`ref_logpsd` given) - the observed log-PSD minus the
+    clean class reference is exactly 2 log|K(f)|, so the radius follows from a
+    direct curve match. This is accurate and is the mode used in the pipeline,
+    since clean normals are always on hand.
+
+    blind (no reference) - the image's own spectrum is unknown, so it is
+    absorbed by a free affine term in log-frequency (a power-law prior). This
+    is noticeably weaker at large radii, where little signal survives above
+    the noise floor, and is kept only as a fallback.
+    """
+    from src.degrade.simulator import defocus_kernel
+
+    freq, power = radial_psd(img)
+    logp = np.log(np.maximum(power, EPS))
+
+    lo = max(int(0.06 * len(freq)), 2)
+    floor = float(np.median(logp[-8:]))
+    above = np.where(logp > floor + 0.35)[0]
+    hi = int(above[-1]) + 1 if above.size else int(0.80 * len(freq))
+    hi = int(np.clip(hi, lo + 12, len(freq)))
+    band = slice(lo, hi)
+
+    radii = np.arange(0.0, max_radius + step, step)
+
+    if ref_logpsd is not None:
+        ratio = logp - np.asarray(ref_logpsd, np.float32)
+        errs = []
+        for r in radii:
+            model = (np.zeros_like(freq) if r < step
+                     else 2.0 * np.log(_radial_mtf(defocus_kernel(float(r)), freq)))
+            errs.append(float(np.mean((ratio[band] - model[band]) ** 2)))
+        errs = np.asarray(errs)
+    else:
+        f = np.maximum(freq[band], 1e-3)
+        y = logp[band]
+        base = np.stack([np.ones_like(f), np.log(f)], axis=1)
+        errs = []
+        for r in radii:
+            model = (np.zeros_like(freq) if r < step
+                     else 2.0 * np.log(_radial_mtf(defocus_kernel(float(r)), freq)))
+            A = np.concatenate([base, model[band][:, None]], axis=1)
+            coef, *_ = np.linalg.lstsq(A, y, rcond=None)
+            resid = y - A @ coef
+            err = float(np.mean(resid ** 2)) + (10.0 if coef[2] < 0.25 else 0.0)
+            errs.append(err)
+        errs = np.asarray(errs)
+
+    best = int(np.argmin(errs))
+    best_r = float(radii[best])
+    spread = float(errs.max() - errs.min())
+    conf = float(np.clip(spread / (errs.mean() + EPS), 0.0, 1.0))
+    return best_r, conf
+
+
+# --------------------------------------------------------------------------
+# 4. compression  -  DCT histogram periodicity
+# --------------------------------------------------------------------------
+
+def estimate_jpeg_qf(img: np.ndarray, min_excess: float = 0.18) -> int:
+    """JPEG quality estimate from blockiness at the 8x8 grid.
+
+    Compares the mean gradient on the block boundary against the mean gradient
+    just inside the block (offsets 3 and 4), rather than against all non-grid
+    positions: any periodicity the image itself contains at other offsets then
+    cancels out. Requires a clear margin before reporting compression at all,
+    so mildly self-similar textures are not mistaken for JPEG artefacts.
+    """
+    g = _gray(img) * 255.0
+    h, w = g.shape
+    if h < 32 or w < 32:
+        return 100
+
+    dv = np.abs(np.diff(g, axis=1))
+    dh = np.abs(np.diff(g, axis=0))
+
+    def ratio(d: np.ndarray, axis: int) -> float:
+        n = d.shape[axis]
+        on = np.take(d, np.arange(7, n, 8), axis=axis)
+        # mid-block reference offsets, far from the boundary
+        ref_idx = np.concatenate([np.arange(3, n, 8), np.arange(4, n, 8)])
+        ref_idx = ref_idx[ref_idx < n]
+        if on.size == 0 or ref_idx.size == 0:
+            return 1.0
+        off = np.take(d, ref_idx, axis=axis)
+        return float(on.mean() / (off.mean() + EPS))
+
+    r = 0.5 * (ratio(dv, 1) + ratio(dh, 0))
+    excess = r - 1.0
+    if excess < min_excess:
+        return 100
+    qf = int(np.clip(100.0 - 95.0 * (excess - min_excess) - 5.0, 20, 99))
+    return qf
+
+
+# --------------------------------------------------------------------------
+# top-level estimator
+# --------------------------------------------------------------------------
+
+def estimate(img: np.ndarray,
+             poly_degree: int = 3,
+             motion_conf_thresh: float = 0.25,
+             defocus_min_radius: float = 0.75,
+             ref_logpsd: np.ndarray | None = None) -> DegradationEstimate:
+    """Run the full defect-blind estimation chain on one image.
+
+    Pass `ref_logpsd` (from reference_psd() over that category's clean training
+    normals) whenever it is available - blur estimation is substantially more
+    accurate with it.
+    """
+    est = DegradationEstimate()
+
+    est.noise_sigma = estimate_noise_sigma(img)
+    est.illum_field, est.illum_ev = estimate_illumination(img, degree=poly_degree)
+    est.jpeg_qf = estimate_jpeg_qf(img)
+
+    # decide blur type: motion evidence wins if the cepstral peak is confident
+    m_len, m_ang, m_conf = estimate_motion_blur(img)
+    d_rad, _ = estimate_defocus_radius(img, ref_logpsd=ref_logpsd)
+
+    if m_conf >= motion_conf_thresh and m_len >= 2.0:
+        est.blur_kind = "motion"
+        est.blur_length = m_len
+        est.blur_angle = m_ang
+    elif d_rad >= defocus_min_radius:
+        est.blur_kind = "defocus"
+        est.blur_radius = d_rad
+    else:
+        est.blur_kind = "none"
+
+    return est
+
+
+def parameter_error(est: DegradationEstimate, truth) -> dict[str, float]:
+    """Absolute errors against ground-truth DegradationParams."""
+    return {
+        "noise_sigma_err": abs(est.noise_sigma - truth.noise_read),
+        "blur_radius_err": abs(est.blur_radius - truth.blur_radius),
+        "blur_length_err": abs(est.blur_length - truth.blur_length),
+        "blur_kind_correct": float(est.blur_kind == truth.blur_kind),
+        "jpeg_qf_err": abs(est.jpeg_qf - truth.jpeg_qf),
+    }
