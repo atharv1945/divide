@@ -231,9 +231,22 @@ These ran on this laptop, on real MVTec data, and are genuine results — but re
 
 **Classical DRR study, real MVTec, full grid** (`results/drr_study_real.csv`, `results/drr_study_real_summary.csv`, `figures/drr_frontier.png` etc. — regenerated for this run, same filenames as the go/no-go study, so if you re-run step 2 above it will overwrite these; rename or move them first if you want to keep both):
 
-> **[Classical-restorers-only real-MVTec DRR result: pending — this run was still in progress when this section was written; see the commit that adds `results/drr_study_real*.csv` for the actual numbers, or re-run `results/drr_study_real_summary.csv` yourself]**
+Ran to completion: 14,400 rows (3 categories × 20 images × 6 families × 5 severities × 8 classical restorers), script-reported verdict **NO-GO** (mean relative DRR 1.039 > 0.8) — but the mean hides a real, non-obvious split that the per-restorer table shows clearly:
 
-This is **not the go/no-go verdict** — classical restorers only, and the README says explicitly that classical restorers alone can't settle the question the project is actually about (learned natural-image priors). It's a real-data baseline: whatever the deep restorers do in step 2 above, you can compare it against what the classical pipeline already does here.
+| restorer | relative DRR (mean) | reading |
+|---|---|---|
+| clahe | 1.64 | amplifies the residual (contrast-enhancement artefact, not real preservation) |
+| msrcr | 1.79 | same, more so |
+| identity | 1.00 | baseline, by construction |
+| bilateral | 0.97 | barely touches the defect |
+| nlm | 0.96 | barely touches the defect |
+| gaussian | 0.90 | mild erosion |
+| wiener | 0.52 | erases roughly half the defect residual |
+| classical_pipeline | 0.50 | same |
+
+The plain denoisers (bilateral/nlm/gaussian) sit close to 1.0 across every severity (`figures/drr_vs_severity.png`) — spatial smoothing alone doesn't do much to a scratch or blob at these degradation levels. The deconvolution-based methods (wiener, and `classical_pipeline`, which chains illumination correction, denoising, and Wiener deblurring) sit consistently around 0.5, worst at high severity (down to ~0.44 at severity 4-5) — deconvolution's ringing/sharpening measurably suppresses fine defect structure, most visibly for scratches specifically (`figures/drr_by_kind.png`: wiener's scratch column is its lowest of the three kinds). clahe/msrcr's numbers above 1.0 are not "better than identity" in any meaningful sense - their contrast stretching inflates the raw pixel-difference metric on both normal and defect regions alike (see their `dremr_mean` in `results/drr_study_real_summary.csv`, both strongly negative - they move *further* from the clean image than the degraded input already was).
+
+This is **not the go/no-go verdict** — classical restorers only, and the README says explicitly that classical restorers alone can't settle the question the project is actually about (learned natural-image priors). But it's a real, informative, real-data result: on this data, generic denoising leaves defects mostly intact, while anything that actively deconvolves (which is closer to what a deep restorer's learned prior effectively does) already erases about half the signal even in the classical case. That's a reasonable prior for what the deep restorers in step 2 might do, not a substitute for actually measuring it.
 
 ## Known fragile points
 
