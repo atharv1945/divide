@@ -3,7 +3,12 @@ scipy>=1.10
 opencv-python-headless>=4.8
 Pillow>=10.0
 pyyaml>=6.0
-pandas>=2.0
+# pandas 3.x changes the truthiness of an empty DataFrame.apply() result,
+# which breaks anomalib's Folder dataset builder (folder.py's mask-matching
+# check raises ValueError: truth value of a Series is ambiguous). Untested
+# against anomalib past this pin; bump only after re-running the detector
+# harness tests.
+pandas>=2.0,<3
 matplotlib>=3.7
 scikit-image>=0.21
 scikit-learn>=1.3
@@ -22,6 +27,18 @@ anomalib[core]==1.1.0
 timm>=0.9,<=1.0.3
 lpips>=0.1.4
 gradio>=4.0
+requests>=2.28
+# anomalib's models/__init__.py eagerly imports an unrelated video model
+# (AI-VAD) that uses a legacy pkg_resources-based CLIP loader. setuptools
+# >=81 dropped pkg_resources, so importing ANY anomalib model - not just
+# AI-VAD - fails with ModuleNotFoundError without this pin.
+setuptools<81
 
 # dev / test
 pytest>=7.0
+
+# See src/detect/_compat.py for four more anomalib-vs-current-environment
+# fixes (numpy>=2 removed np.sctypes, a Matplotlib API rename, a private
+# rich.Console attribute rename) that are shimmed in code rather than
+# pinned here, because pinning numpy<2 could not be verified on this Python
+# 3.14 sandbox (no prebuilt wheel) and may or may not be needed on yours.

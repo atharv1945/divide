@@ -10,4 +10,5 @@ venv/
 mvtec/
 dtd/
 third_party/
+datasets/
 
