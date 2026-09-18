@@ -1,0 +1,47 @@
+# Overnight CPU run. 128x128, small batch - see HANDOFF.md for the exact
+# command and how to check progress. Step count is sized from measured
+# per-step wall-clock on this machine (src.experiments.train_pcim --smoke
+# timing, scaled to 128x128) for roughly an 8-hour run; if you're on
+# noticeably faster/slower hardware, scale `train.steps` accordingly rather
+# than trusting this number literally.
+seed: 0
+
+data:
+  categories: [carpet, bottle, screw]
+  size: 128
+  n_train_per_category: 64
+
+anomaly:
+  kinds: [texture, scratch, blob]
+
+degrade:
+  families: [defocus, motion, illumination, noise, jpeg, mixed]
+  severity_range: [1, 5]
+
+model:
+  n_iters: 5
+  rho0: 1.0
+  rho_scale: 2.0
+  prox_width: 24
+  prox_depth: 4
+  illum_clamp: 4.0
+  vst_gain: 1.0
+
+loss:
+  use_lpres: true
+  w_rec: 1.0
+  w_deg: 0.5
+  w_freq: 0.1
+  w_pres: 1.0
+
+train:
+  lr: 0.0002
+  batch_size: 4
+  steps: 6000
+  log_every: 25
+  checkpoint_every: 100
+  eval_every: 250
+
+eval:
+  seed: 12345
+  n_examples: 24

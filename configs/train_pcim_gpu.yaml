@@ -1,0 +1,44 @@
+# Full-resolution GPU run. 256x256, larger batch, more steps. Untested on
+# GPU - re-time a short run here before trusting `train.steps`'s implied
+# wall-clock the way you would on CPU.
+seed: 0
+
+data:
+  categories: [carpet, bottle, screw]
+  size: 256
+  n_train_per_category: 128
+
+anomaly:
+  kinds: [texture, scratch, blob]
+
+degrade:
+  families: [defocus, motion, illumination, noise, jpeg, mixed]
+  severity_range: [1, 5]
+
+model:
+  n_iters: 5
+  rho0: 1.0
+  rho_scale: 2.0
+  prox_width: 24        # do NOT raise this to chase reconstruction loss -
+  prox_depth: 4          # the <=200K prox param cap is the mechanism, not a knob
+  illum_clamp: 4.0
+  vst_gain: 1.0
+
+loss:
+  use_lpres: true
+  w_rec: 1.0
+  w_deg: 0.5
+  w_freq: 0.1
+  w_pres: 1.0
+
+train:
+  lr: 0.0002
+  batch_size: 16
+  steps: 60000
+  log_every: 50
+  checkpoint_every: 500
+  eval_every: 1000
+
+eval:
+  seed: 12345
+  n_examples: 64

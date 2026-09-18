@@ -11,4 +11,5 @@ mvtec/
 dtd/
 third_party/
 datasets/
-
+results/
+figures/

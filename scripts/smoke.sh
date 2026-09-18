@@ -15,6 +15,11 @@ python -m src.experiments.eval_grid --smoke --detectors padim \
     --restorers identity gaussian --families noise --severities 3 \
     --n-train 6 --n-test 4 --categories carpet --tag smoke_eval_grid
 echo
+echo "== PCIM training (smoke, incl. kill-and-resume) =="
+rm -f checkpoints/smoke_train.pt results/smoke_train_losses.csv results/smoke_train_eval.csv
+python -m src.experiments.train_pcim --config configs/train_pcim_cpu.yaml \
+    --smoke --run-name smoke_train
+echo
 echo "== gradio demo (construction only, no server) =="
 python -c "from src.demo.app import build_demo; build_demo(); print('  demo builds OK')"
 echo
