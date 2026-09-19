@@ -3,7 +3,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from src.data.mvtec import synthetic_split
+from src.data.mvtec import dataset_available, synthetic_split
 from src.utils.paths import load_config
 
 
@@ -12,6 +12,35 @@ def smoke_cfg():
     import src.experiments.train_pcim as tp
     cfg = load_config("configs/train_pcim_cpu.yaml")
     return tp._apply_smoke_overrides(cfg)
+
+
+requires_real_data = pytest.mark.skipif(
+    not dataset_available(),
+    reason="needs real MVTec AD (DIVIDE_DATA_ROOT) - see HANDOFF.md",
+)
+
+
+@requires_real_data
+def test_x_cons_dremr_never_dramatically_worse_than_doing_nothing_on_real_mvtec():
+    """The regression test that should have existed before the overnight
+    run: x_cons (pure physics, no learned prox) must never be dramatically
+    worse than passthrough (DRemR=0 by construction) on real data. This is
+    exactly the condition src.models.pcim.assert_physics_sane checks live
+    during training - this test is the same assertion, run once here as a
+    standing regression guard on the config actually used for the CPU
+    overnight run, so a future regression in illumination/VST/Wiener is
+    caught by CI-style testing, not by an 8-hour run silently absorbing it."""
+    from src.experiments.bisect_pcim import bisect
+
+    cfg = load_config("configs/train_pcim_cpu.yaml")
+    result = bisect(cfg, device="cpu", use_reference=True)
+    x_cons_dremr = result["stage3"]["dremr"]
+    assert np.isfinite(x_cons_dremr)
+    assert x_cons_dremr >= -0.5, (
+        f"x_cons DRemR = {x_cons_dremr:.3f} on real MVTec - the physics chain "
+        f"(illumination / VST / Wiener) is doing real damage, independent of "
+        f"the learned prox. Do not retune loss weights for this."
+    )
 
 
 def _one_image(size=64):

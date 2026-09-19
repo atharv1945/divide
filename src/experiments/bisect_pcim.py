@@ -22,12 +22,12 @@ from src.data.mvtec import load_train_normals
 from src.dbde.estimator import estimate
 from src.degrade.simulator import apply_kernel, defocus_kernel
 from src.experiments.train_pcim import (
-    _est_to_tensors, _img_to_tensor, build_eval_set, load_data_pools,
+    _est_to_tensors, _img_to_tensor, build_eval_set, build_reference_cache, load_data_pools,
 )
 from src.degrade.anomaly import TextureBank
 from src.metrics.core import degradation_removal_ratio, psnr
 from src.models.pcim import (
-    _kernel_to_otf, generalized_anscombe, identity_otf, illumination_divide,
+    _kernel_to_otf, generalized_anscombe, illumination_divide,
     illumination_restore, inverse_generalized_anscombe, wiener_data_step,
 )
 from src.utils.paths import dtd_root, load_config
@@ -40,11 +40,18 @@ EPS = 1e-8
 # --------------------------------------------------------------------------
 
 def run_stages(ex, model_cfg: dict, device: str = "cpu") -> dict[str, torch.Tensor]:
+    """Mirrors PCIM.forward()'s actual behaviour, including its fail-safes:
+    kernel=None (no blur detected) skips the Wiener data step entirely at
+    stage 3 rather than deconvolving against an identity kernel, and the
+    sigma fed to Wiener is floored at sqrt(nsr_floor), same as PCIM does
+    internally. Stage 3 with these fail-safes IS x_cons as the real,
+    current pipeline produces it - not a separate reimplementation of it."""
     illum, kernel, sigma = _est_to_tensors(ex.est, device)
     y = _img_to_tensor(ex.y_a, device)
-    b, c, h, w = y.shape
     clamp = model_cfg["illum_clamp"]
     gain = model_cfg["vst_gain"]
+    nsr_floor = model_cfg.get("nsr_floor", 0.01)
+    sigma_wiener = sigma.clamp(min=nsr_floor ** 0.5)
 
     stage0 = y  # identity passthrough
 
@@ -58,16 +65,15 @@ def run_stages(ex, model_cfg: dict, device: str = "cpu") -> dict[str, torch.Tens
 
     x3 = illumination_divide(y, illum, clamp)
     v3 = generalized_anscombe(x3, sigma, gain)
-    if kernel is not None:
-        otf = _kernel_to_otf(kernel, h, w)
-    else:
-        otf = identity_otf((b, c), h, w, y.dtype, device)
-    if otf.shape[1] == 1 and c > 1:
-        otf = otf.expand(b, c, h, w)
     xk = v3
-    for t in range(model_cfg["n_iters"]):
-        rho_t = model_cfg["rho0"] * (model_cfg["rho_scale"] ** t)
-        xk = wiener_data_step(v3, xk, otf, sigma, rho_t)
+    if kernel is not None:
+        b, c, h, w = y.shape
+        otf = _kernel_to_otf(kernel, h, w)
+        if otf.shape[1] == 1 and c > 1:
+            otf = otf.expand(b, c, h, w)
+        for t in range(model_cfg["n_iters"]):
+            rho_t = model_cfg["rho0"] * (model_cfg["rho_scale"] ** t)
+            xk = wiener_data_step(v3, xk, otf, sigma_wiener, rho_t)
     v3b = inverse_generalized_anscombe(xk, sigma, gain)
     stage3 = illumination_restore(v3b, illum, clamp)
 
@@ -75,10 +81,11 @@ def run_stages(ex, model_cfg: dict, device: str = "cpu") -> dict[str, torch.Tens
 
 
 @torch.no_grad()
-def bisect(cfg: dict, device: str = "cpu") -> dict[str, dict[str, float]]:
+def bisect(cfg: dict, device: str = "cpu", use_reference: bool = True) -> dict[str, dict[str, float]]:
     pools = load_data_pools(cfg, smoke=False)
     bank = TextureBank(dtd_root() if dtd_root().exists() else None)
-    eval_set = build_eval_set(cfg, pools, bank)
+    ref_cache = build_reference_cache(pools) if use_reference else None
+    eval_set = build_eval_set(cfg, pools, bank, ref_cache)
 
     metrics = {s: {"dremr": [], "psnr": []} for s in
               ("stage0", "stage1", "stage2", "stage3")}
@@ -103,12 +110,15 @@ def bisect(cfg: dict, device: str = "cpu") -> dict[str, dict[str, float]]:
     }
 
 
-def inspect_eval_set_estimates(cfg: dict) -> dict:
+def inspect_eval_set_estimates(cfg: dict, use_reference: bool = True) -> dict:
     """What DBDE actually estimated on the eval set images that stage 3
-    fails on - what is Wiener actually being fed, not a hand-picked nsr."""
+    fails on - what is Wiener actually being fed, not a hand-picked nsr.
+    use_reference=False reproduces the ORIGINAL blind-only decision (the
+    100%-motion false-positive finding) for before/after comparison."""
     pools = load_data_pools(cfg, smoke=False)
     bank = TextureBank(dtd_root() if dtd_root().exists() else None)
-    eval_set = build_eval_set(cfg, pools, bank)
+    ref_cache = build_reference_cache(pools) if use_reference else None
+    eval_set = build_eval_set(cfg, pools, bank, ref_cache)
 
     sigmas, blur_kinds, radii, lengths = [], [], [], []
     for ex in eval_set:
@@ -287,9 +297,18 @@ def main() -> int:
     ref_img = ref_imgs[0]
 
     print("=" * 70)
-    print("CUMULATIVE PIPELINE BISECTION")
+    print("BLUR_KIND DISTRIBUTION: BEFORE (blind-only) vs AFTER (reference-primary)")
     print("=" * 70)
-    stage_results = bisect(cfg, device=args.device)
+    from collections import Counter
+    before = inspect_eval_set_estimates(cfg, use_reference=False)
+    after = inspect_eval_set_estimates(cfg, use_reference=True)
+    print(f"  BEFORE (blind):     {before['blur_kind_counts']}")
+    print(f"  AFTER (reference):  {after['blur_kind_counts']}")
+
+    print("\n" + "=" * 70)
+    print("CUMULATIVE PIPELINE BISECTION (reference-primary, current pipeline)")
+    print("=" * 70)
+    stage_results = bisect(cfg, device=args.device, use_reference=True)
     print(f"{'stage':10s} {'DRemR':>10s} {'PSNR (dB)':>10s}  n")
     labels = {"stage0": "0 identity", "stage1": "1 illum", "stage2": "2 +VST",
              "stage3": "3 +Wiener (=x_cons)"}
@@ -333,9 +352,9 @@ def main() -> int:
         print(f"  {k:20s} {v}")
 
     print("\n" + "=" * 70)
-    print("SUPPLEMENTARY: what DBDE actually estimates on the failing eval set")
+    print("SUPPLEMENTARY: what DBDE actually estimates on the eval set (AFTER)")
     print("=" * 70)
-    est_stats = inspect_eval_set_estimates(cfg)
+    est_stats = after
     print(f"  n={est_stats['n']}  noise_sigma: min={est_stats['sigma_min']:.5f} "
           f"max={est_stats['sigma_max']:.5f} mean={est_stats['sigma_mean']:.5f} "
           f"median={est_stats['sigma_median']:.5f}")

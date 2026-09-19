@@ -238,3 +238,127 @@ def test_estimate_needs_no_gpu_or_weights():
     import src.dbde.estimator as m
     src = open(m.__file__).read()
     assert "torch" not in src and "cuda" not in src.lower()
+
+
+# --------------------------------------------------------------------------
+# blur-detection regression on REAL MVTec, not the synthetic textured()
+# fixture - textured() is exactly why the original 100%-false-positive bug
+# on real images was missed: it tested the right property (defect
+# blindness, blur-length accuracy) against the wrong data. estimate_motion
+# _blur's cepstral peak fires on periodic real-world texture (carpet weave,
+# screw threads, bottle rims) that textured()'s procedural noise doesn't
+# reproduce.
+# --------------------------------------------------------------------------
+
+from src.data.mvtec import dataset_available, load_train_normals  # noqa: E402
+
+requires_real_data = pytest.mark.skipif(
+    not dataset_available(),
+    reason="needs real MVTec AD (DIVIDE_DATA_ROOT) - see HANDOFF.md",
+)
+
+
+@requires_real_data
+def test_reference_blur_detection_false_positive_rate_on_real_images():
+    """No-blur families (noise/illumination/jpeg) must not be classified as
+    blurred, on real photographs, with a category reference available -
+    reference mode is the primary path (src.dbde.estimator's module
+    docstring). Illumination severities 4-5 (strong under/over-exposure)
+    are excluded and checked separately below: exposure clipping produces a
+    genuine broadband high-frequency deficit that a short kernel can fit
+    about as well as it fits genuine short motion blur at the same length
+    scale - a real, currently-unresolved ambiguity at this resolution, not
+    a threshold that was left too loose. See bisect_pcim.py's commit
+    message / HANDOFF.md for the numbers behind that call.
+    """
+    from src.dbde.estimator import estimate, reference_psd
+    from src.degrade.simulator import sample_params, apply_degradation
+
+    imgs = load_train_normals("carpet", size=128, limit=20, smoke=False)
+    ref_imgs, test_imgs = imgs[:6], imgs[6:]
+    ref_logpsd = reference_psd(ref_imgs)
+    rng = np.random.default_rng(0)
+
+    fp = 0
+    n = 0
+    for family in ("noise", "jpeg"):
+        for severity in (1, 3, 5):
+            for img in test_imgs:
+                p = sample_params(family, severity, rng)
+                y = apply_degradation(img, p, np.random.default_rng(0))
+                est = estimate(y, ref_logpsd=ref_logpsd)
+                n += 1
+                if est.blur_kind != "none":
+                    fp += 1
+    for severity in (1, 2, 3):
+        for img in test_imgs:
+            p = sample_params("illumination", severity, rng)
+            y = apply_degradation(img, p, np.random.default_rng(0))
+            est = estimate(y, ref_logpsd=ref_logpsd)
+            n += 1
+            if est.blur_kind != "none":
+                fp += 1
+
+    rate = fp / n
+    assert rate < 0.05, f"false-positive rate {rate:.1%} ({fp}/{n}) - should be near zero"
+
+
+@requires_real_data
+def test_reference_blur_detection_on_severe_illumination_is_bounded_not_zero():
+    """Documents the known residual, rather than pretending it's zero:
+    illumination severities 4-5 have a real, non-trivial false-positive
+    rate (measured ~10-65% depending on severity/direction), but nowhere
+    near the pre-fix 100%. This asserts the bound so a future regression
+    (back toward 100%) is caught, without claiming a perfection the
+    detector doesn't have."""
+    from src.dbde.estimator import estimate, reference_psd
+    from src.degrade.simulator import sample_params, apply_degradation
+
+    imgs = load_train_normals("carpet", size=128, limit=20, smoke=False)
+    ref_imgs, test_imgs = imgs[:6], imgs[6:]
+    ref_logpsd = reference_psd(ref_imgs)
+    rng = np.random.default_rng(0)
+
+    fp, n = 0, 0
+    for severity in (4, 5):
+        for img in test_imgs:
+            p = sample_params("illumination", severity, rng)
+            y = apply_degradation(img, p, np.random.default_rng(0))
+            est = estimate(y, ref_logpsd=ref_logpsd)
+            n += 1
+            if est.blur_kind != "none":
+                fp += 1
+
+    rate = fp / n
+    assert rate < 0.8, f"false-positive rate regressed toward the pre-fix 100%: {rate:.1%}"
+
+
+@requires_real_data
+@pytest.mark.parametrize("family", ["defocus", "motion"])
+def test_reference_blur_detection_true_positive_rate_at_severity_2_plus(family):
+    """Real blur must still be detected once it's present, severity 2 and
+    up - severity 1 is allowed to be missed (the tightened acceptance
+    floors that killed the false positives also cost some severity-1
+    sensitivity: true defocus-severity-1 radius is 1.0px, right at the
+    1.5px floor; true motion-severity-1 length is 3px, below the cepstral
+    search's own 6px floor - neither was reliably detectable to begin
+    with)."""
+    from src.dbde.estimator import estimate, reference_psd
+    from src.degrade.simulator import sample_params, apply_degradation
+
+    imgs = load_train_normals("carpet", size=128, limit=20, smoke=False)
+    ref_imgs, test_imgs = imgs[:6], imgs[6:]
+    ref_logpsd = reference_psd(ref_imgs)
+    rng = np.random.default_rng(1)
+
+    for severity in (2, 3, 4, 5):
+        tp, n = 0, 0
+        for img in test_imgs:
+            p = sample_params(family, severity, rng)
+            y = apply_degradation(img, p, np.random.default_rng(0))
+            est = estimate(y, ref_logpsd=ref_logpsd)
+            n += 1
+            if est.blur_kind == family:
+                tp += 1
+        rate = tp / n
+        assert rate > 0.8, f"{family} severity {severity}: true-positive rate {rate:.1%} too low"

@@ -61,14 +61,14 @@ import numpy as np
 import torch
 
 from src.data.mvtec import load_train_normals, synthetic_split
-from src.dbde.estimator import DegradationEstimate, estimate
+from src.dbde.estimator import DegradationEstimate, estimate, reference_psd
 from src.degrade.anomaly import ANOMALY_KINDS, TextureBank, paste_anomaly
 from src.degrade.simulator import degrade_pair
 from src.metrics.core import defect_retention_ratio, degradation_removal_ratio, psnr, relative_drr
 from src.models.losses import (
     degradation_consistency_loss, frequency_loss, preservation_loss, reconstruction_loss,
 )
-from src.models.pcim import PCIM
+from src.models.pcim import PCIM, assert_physics_sane
 from src.utils.paths import checkpoints_dir, dtd_root, load_config, results_dir
 
 EPS = 1e-8
@@ -91,6 +91,15 @@ def load_data_pools(cfg: dict, smoke: bool) -> dict[str, list[np.ndarray]]:
     return pools
 
 
+def build_reference_cache(pools: dict[str, list[np.ndarray]]) -> dict[str, np.ndarray]:
+    """One reference_psd() per category, computed once from its own clean
+    training normals. This is what makes reference-based blur detection
+    (the primary path in src.dbde.estimator - see its module docstring)
+    possible during training: DBDE needs the SAME category's clean spectrum
+    to test a query image against, not a generic one."""
+    return {cat: reference_psd(imgs) for cat, imgs in pools.items()}
+
+
 @dataclass
 class Example:
     category: str
@@ -106,7 +115,8 @@ class Example:
 
 
 def _sample_example(rng: np.random.Generator, pools: dict[str, list[np.ndarray]],
-                    cfg: dict, bank: TextureBank) -> Example:
+                    cfg: dict, bank: TextureBank,
+                    ref_cache: dict[str, np.ndarray] | None = None) -> Example:
     categories = list(pools)
     category = categories[rng.integers(len(categories))]
     pool = pools[category]
@@ -124,20 +134,21 @@ def _sample_example(rng: np.random.Generator, pools: dict[str, list[np.ndarray]]
     pair_seed = int(rng.integers(0, 2 ** 31 - 1))
     y_a, y_0, _params = degrade_pair(x_a, x0, family, severity, seed=pair_seed)
 
-    ref_logpsd = None  # blind mode for training - no clean-normals reference wired in yet
+    ref_logpsd = ref_cache.get(category) if ref_cache else None
     est = estimate(y_0, ref_logpsd=ref_logpsd)
 
     return Example(category=category, x0=x0, x_a=x_a, mask=mask, kind=kind,
                    family=family, severity=severity, y_a=y_a, y_0=y_0, est=est)
 
 
-def build_eval_set(cfg: dict, pools: dict[str, list[np.ndarray]], bank: TextureBank) -> list[Example]:
+def build_eval_set(cfg: dict, pools: dict[str, list[np.ndarray]], bank: TextureBank,
+                   ref_cache: dict[str, np.ndarray] | None = None) -> list[Example]:
     """Fixed, built once at startup from a SEPARATE seed than training - the
     same set is reused at every eval_every checkpoint, so eval numbers are
     comparable across steps."""
     rng = np.random.default_rng(cfg["eval"]["seed"])
     n = cfg["eval"]["n_examples"]
-    return [_sample_example(rng, pools, cfg, bank) for _ in range(n)]
+    return [_sample_example(rng, pools, cfg, bank, ref_cache) for _ in range(n)]
 
 
 # --------------------------------------------------------------------------
@@ -153,9 +164,16 @@ def _mask_to_tensor(mask: np.ndarray, device: str) -> torch.Tensor:
     return torch.from_numpy(np.ascontiguousarray(mask)).unsqueeze(0).float().to(device)
 
 
-def _est_to_tensors(est: DegradationEstimate, device: str) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def _est_to_tensors(est: DegradationEstimate, device: str) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor]:
     illum = torch.from_numpy(np.ascontiguousarray(est.illum_field)).unsqueeze(0).unsqueeze(0).float().to(device)
-    kernel = torch.from_numpy(np.ascontiguousarray(est.kernel())).unsqueeze(0).unsqueeze(0).float().to(device)
+    # None when no blur was detected - PCIM.forward() skips the Wiener data
+    # step entirely for None, rather than deconvolving against a fake
+    # identity kernel (see pcim.py's forward() docstring for why that
+    # distinction matters).
+    if est.blur_kind == "none":
+        kernel = None
+    else:
+        kernel = torch.from_numpy(np.ascontiguousarray(est.kernel())).unsqueeze(0).unsqueeze(0).float().to(device)
     sigma = torch.tensor([max(est.noise_sigma, 1e-4)], dtype=torch.float32, device=device)
     return illum, kernel, sigma
 
@@ -227,19 +245,33 @@ def weighted_total(raw: dict[str, torch.Tensor], scale_factors: dict[str, float]
 
 
 @torch.no_grad()
-def evaluate(model: PCIM, eval_set: list[Example], device: str) -> dict[str, float]:
+def evaluate(model: PCIM, eval_set: list[Example], device: str,
+            physics_check: bool = True, physics_floor: float = -0.5) -> dict[str, float]:
     """Relative DRR is reported overall AND broken out per anomaly kind -
     scratches are the case that decides this project, and they're exactly
     what an aggregate mean would hide if they behaved worse than blobs/
     texture. rel_drr_by_kind[k] is nan if the eval set has no examples of
-    kind k with a finite relative DRR."""
+    kind k with a finite relative DRR.
+
+    Also evaluates x_cons (the pure-physics, no-learned-component path) and,
+    if physics_check is set, raises loudly (assert_physics_sane) when its
+    DRemR falls below physics_floor - x_cons has no mechanism to blame a
+    training-driven excuse for being wrong, so this is a physics-chain bug
+    whenever it fires, not a training issue, and it should stop the run
+    rather than be silently absorbed by hours of further training on top of
+    it (see README/HANDOFF for exactly this happening before this check
+    existed).
+    """
     model.eval()
     rel_drrs, dremrs, psnrs = [], [], []
     rel_drrs_by_kind: dict[str, list[float]] = {k: [] for k in ANOMALY_KINDS}
+    cons_dremrs, cons_psnrs = [], []
     for ex in eval_set:
-        x_full_a, _, x_full_0, _, _, _, _, _ = _restore_both(model, ex, device)
+        x_full_a, x_cons_a, x_full_0, _, _, _, _, _ = _restore_both(model, ex, device)
         r_a = x_full_a.squeeze(0).clamp(0, 1).cpu().numpy().transpose(1, 2, 0)
         r_0 = x_full_0.squeeze(0).clamp(0, 1).cpu().numpy().transpose(1, 2, 0)
+        rc_a = x_cons_a.squeeze(0).clamp(0, 1).cpu().numpy().transpose(1, 2, 0)
+        normal_mask = ~ex.mask.astype(bool)
 
         drr_id = defect_retention_ratio(ex.y_a, ex.y_0, ex.x_a, ex.x0, ex.mask)
         drr_method = defect_retention_ratio(r_a, r_0, ex.x_a, ex.x0, ex.mask)
@@ -252,19 +284,33 @@ def evaluate(model: PCIM, eval_set: list[Example], device: str) -> dict[str, flo
         if np.isfinite(dremr):
             dremrs.append(dremr)
 
-        p = psnr(r_a, ex.x_a, mask=~ex.mask.astype(bool))
+        p = psnr(r_a, ex.x_a, mask=normal_mask)
         if np.isfinite(p):
             psnrs.append(p)
 
+        cons_dremr = degradation_removal_ratio(rc_a, ex.y_a, ex.x_a, ex.mask)
+        if np.isfinite(cons_dremr):
+            cons_dremrs.append(cons_dremr)
+        cons_p = psnr(rc_a, ex.x_a, mask=normal_mask)
+        if np.isfinite(cons_p):
+            cons_psnrs.append(cons_p)
+
     model.train()
+    x_cons_dremr = float(np.mean(cons_dremrs)) if cons_dremrs else float("nan")
     out = dict(
         relative_drr=float(np.mean(rel_drrs)) if rel_drrs else float("nan"),
         dremr=float(np.mean(dremrs)) if dremrs else float("nan"),
         psnr_normal=float(np.mean(psnrs)) if psnrs else float("nan"),
         n=len(eval_set),
+        x_cons_dremr=x_cons_dremr,
+        x_cons_psnr_normal=float(np.mean(cons_psnrs)) if cons_psnrs else float("nan"),
     )
     for kind, vals in rel_drrs_by_kind.items():
         out[f"relative_drr_{kind}"] = float(np.mean(vals)) if vals else float("nan")
+
+    if physics_check and np.isfinite(x_cons_dremr):
+        assert_physics_sane(x_cons_dremr, floor=physics_floor)
+
     return out
 
 
@@ -353,30 +399,35 @@ def run(cfg: dict, run_name: str, device: str | None = None,
 
     pools = load_data_pools(cfg, smoke=smoke)
     bank = TextureBank(dtd_root() if dtd_root().exists() else None)
+    ref_cache = build_reference_cache(pools)  # one reference_psd() per category
 
     model_cfg = cfg["model"]
     model = PCIM(n_iters=model_cfg["n_iters"], rho0=model_cfg["rho0"],
                 rho_scale=model_cfg["rho_scale"], prox_width=model_cfg["prox_width"],
                 prox_depth=model_cfg["prox_depth"], illum_clamp=model_cfg["illum_clamp"],
-                vst_gain=model_cfg["vst_gain"]).to(device)
+                vst_gain=model_cfg["vst_gain"],
+                nsr_floor=model_cfg.get("nsr_floor", 0.01)).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=cfg["train"]["lr"])
 
     rng = np.random.default_rng(seed)
     step, scale_factors = load_checkpoint(run_name, model, optimizer, rng, device) if resume else (0, None)
 
-    eval_set = build_eval_set(cfg, pools, bank)  # rebuilt identically every run (own seed)
+    eval_set = build_eval_set(cfg, pools, bank, ref_cache)  # rebuilt identically every run (own seed)
 
     total_steps = max_steps if max_steps is not None else cfg["train"]["steps"]
     log_every = cfg["train"]["log_every"]
     ckpt_every = cfg["train"]["checkpoint_every"]
     eval_every = cfg["train"]["eval_every"]
     batch_size = cfg["train"]["batch_size"]
+    physics_check = bool(cfg.get("eval", {}).get("physics_sanity_check", True))
+    physics_floor = float(cfg.get("eval", {}).get("physics_sanity_dremr_floor", -0.5))
 
     loss_fields = ["step", "total", "elapsed_s"]
     for k in LOSS_TERMS:
         loss_fields += [f"{k}_raw", f"{k}_scaled"]
     loss_csv = CsvLogger(results_dir() / f"{run_name}_losses.csv", loss_fields)
-    eval_fields = ["step", "relative_drr", "dremr", "psnr_normal", "n"]
+    eval_fields = ["step", "relative_drr", "dremr", "psnr_normal", "n",
+                  "x_cons_dremr", "x_cons_psnr_normal"]
     eval_fields += [f"relative_drr_{k}" for k in ANOMALY_KINDS]
     eval_csv = CsvLogger(results_dir() / f"{run_name}_eval.csv", eval_fields)
 
@@ -385,7 +436,7 @@ def run(cfg: dict, run_name: str, device: str | None = None,
     try:
         while step < total_steps:
             optimizer.zero_grad()
-            examples = [_sample_example(rng, pools, cfg, bank) for _ in range(batch_size)]
+            examples = [_sample_example(rng, pools, cfg, bank, ref_cache) for _ in range(batch_size)]
 
             if scale_factors is None:
                 # First real training batch of a fresh run: calibrate once,
@@ -420,7 +471,8 @@ def run(cfg: dict, run_name: str, device: str | None = None,
                 save_checkpoint(run_name, model, optimizer, step, rng, cfg, scale_factors)
 
             if step % eval_every == 0 or step == total_steps:
-                last_eval = evaluate(model, eval_set, device)
+                last_eval = evaluate(model, eval_set, device,
+                                     physics_check=physics_check, physics_floor=physics_floor)
                 eval_csv.write(dict(step=step, **last_eval))
 
             if step % log_every == 0 or step == total_steps:
@@ -434,7 +486,8 @@ def run(cfg: dict, run_name: str, device: str | None = None,
         eval_csv.close()
 
     save_checkpoint(run_name, model, optimizer, step, rng, cfg, scale_factors)  # final state, always
-    return last_eval if last_eval is not None else evaluate(model, eval_set, device)
+    return last_eval if last_eval is not None else evaluate(
+        model, eval_set, device, physics_check=physics_check, physics_floor=physics_floor)
 
 
 # --------------------------------------------------------------------------

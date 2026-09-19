@@ -233,17 +233,30 @@ def cepstrum(img: np.ndarray, signed: bool = True) -> np.ndarray:
     return c.astype(np.float32)
 
 
-def estimate_motion_blur(img: np.ndarray, max_len: int = 24,
-                         min_len: int = 6) -> tuple[float, float, float]:
-    """Return (length_px, angle_rad, confidence) from the signed cepstrum.
+def _motion_cepstral_peak(img: np.ndarray, max_len: int = 24,
+                          min_len: int = 6) -> dict[str, float]:
+    """The actual cepstral peak search. Returns length/angle/prominence/harm
+    SEPARATELY (not just the blended confidence estimate_motion_blur()
+    exposes) so the blur-decision logic can gate on prominence and harmonic
+    confirmation independently rather than through one blended score a
+    strong prominence alone can carry over threshold.
 
     A linear motion kernel of length L makes |K(f)| vanish periodically, which
     appears in the cepstrum as a negative dip at lag L and weaker echoes at
     2L, 3L. We locate the strongest dip outside a DC exclusion disc and then
-    *confirm* it by checking for the first harmonic: a lone dip is usually the
-    image's own structure, whereas a dip plus its harmonic is blur. Lags below
-    `min_len` are not considered, since the DC lobe dominates there and a
-    sub-6px motion blur is in any case negligible.
+    *confirm* it by checking for the first harmonic. Lags below `min_len` are
+    not considered, since the DC lobe dominates there and a sub-6px motion
+    blur is in any case negligible.
+
+    Caution (found the hard way): periodic real-world texture - carpet weave,
+    screw threads, bottle rims - produces cepstral dips indistinguishable from
+    a genuine blur signature, AND periodic texture has harmonics too, so
+    harmonic confirmation alone does not rule it out either. Neither
+    prominence nor harm from this function should be trusted alone as a
+    "there is blur" decision - see _detect_blur_reference/_detect_blur_blind,
+    which additionally require the claimed kernel to explain the image's
+    actual high-frequency energy loss, something periodic texture cannot
+    mimic (reference mode) or is much harder to fake (blind mode).
     """
     c = cepstrum(img, signed=True)
     h, w = c.shape
@@ -251,7 +264,7 @@ def estimate_motion_blur(img: np.ndarray, max_len: int = 24,
 
     win = int(min(max_len, cy - 2, cx - 2))
     if win < min_len + 2:
-        return 0.0, 0.0, 0.0
+        return dict(length=0.0, angle=0.0, prominence=0.0, harm=0.0)
 
     yy, xx = np.mgrid[-win:win + 1, -win:win + 1]
     rad = np.sqrt(yy ** 2 + xx ** 2)
@@ -259,7 +272,7 @@ def estimate_motion_blur(img: np.ndarray, max_len: int = 24,
 
     valid = (rad >= min_len) & (rad <= win)
     if not valid.any():
-        return 0.0, 0.0, 0.0
+        return dict(length=0.0, angle=0.0, prominence=0.0, harm=0.0)
 
     masked = np.where(valid, patch, np.inf)
     k = int(np.argmin(masked))
@@ -283,8 +296,24 @@ def estimate_motion_blur(img: np.ndarray, max_len: int = 24,
         if neigh.size:
             harm = float(np.clip((med - neigh.min()) / (6.0 * mad), 0.0, 1.0))
 
-    conf = float(np.clip(0.65 * np.clip(prominence, 0, 1) + 0.35 * harm, 0.0, 1.0))
-    return length, angle, conf
+    return dict(length=length, angle=angle, prominence=float(np.clip(prominence, 0, 1)),
+               harm=harm)
+
+
+def estimate_motion_blur(img: np.ndarray, max_len: int = 24,
+                         min_len: int = 6) -> tuple[float, float, float]:
+    """Return (length_px, angle_rad, confidence) from the signed cepstrum.
+
+    Thin wrapper around _motion_cepstral_peak() for backward compatibility -
+    `confidence` blends prominence and harmonic confirmation into one score.
+    The blur-decision logic in estimate() does NOT use this blended score to
+    decide whether blur is present (see _motion_cepstral_peak's docstring for
+    why); it calls _motion_cepstral_peak directly instead. This function
+    still stands alone for callers that just want a cepstral peak estimate.
+    """
+    d = _motion_cepstral_peak(img, max_len, min_len)
+    conf = float(np.clip(0.65 * d["prominence"] + 0.35 * d["harm"], 0.0, 1.0))
+    return d["length"], d["angle"], conf
 
 
 def _radial_mtf(kernel: np.ndarray, freq: np.ndarray, n: int = 256) -> np.ndarray:
@@ -322,6 +351,20 @@ def reference_psd(images: list[np.ndarray], nbins: int = 128) -> np.ndarray:
     return (acc / len(images)).astype(np.float32)
 
 
+def _signal_band(freq: np.ndarray, logp: np.ndarray) -> slice:
+    """The frequency band used for curve-fitting: excludes the DC/near-DC
+    region (dominated by content, not blur) and the noise floor at the very
+    top of the spectrum. Shared by defocus radius fitting and the
+    reference-based high-frequency-deficit blur gate, so both operate over
+    the same physically-meaningful band."""
+    lo = max(int(0.06 * len(freq)), 2)
+    floor = float(np.median(logp[-8:]))
+    above = np.where(logp > floor + 0.35)[0]
+    hi = int(above[-1]) + 1 if above.size else int(0.80 * len(freq))
+    hi = int(np.clip(hi, lo + 12, len(freq)))
+    return slice(lo, hi)
+
+
 def estimate_defocus_radius(img: np.ndarray, max_radius: float = 8.0,
                             step: float = 0.25,
                             ref_logpsd: np.ndarray | None = None
@@ -344,13 +387,7 @@ def estimate_defocus_radius(img: np.ndarray, max_radius: float = 8.0,
 
     freq, power = radial_psd(img)
     logp = np.log(np.maximum(power, EPS))
-
-    lo = max(int(0.06 * len(freq)), 2)
-    floor = float(np.median(logp[-8:]))
-    above = np.where(logp > floor + 0.35)[0]
-    hi = int(above[-1]) + 1 if above.size else int(0.80 * len(freq))
-    hi = int(np.clip(hi, lo + 12, len(freq)))
-    band = slice(lo, hi)
+    band = _signal_band(freq, logp)
 
     radii = np.arange(0.0, max_radius + step, step)
 
@@ -382,6 +419,181 @@ def estimate_defocus_radius(img: np.ndarray, max_radius: float = 8.0,
     spread = float(errs.max() - errs.min())
     conf = float(np.clip(spread / (errs.mean() + EPS), 0.0, 1.0))
     return best_r, conf
+
+
+# --------------------------------------------------------------------------
+# blur presence/type decision
+# --------------------------------------------------------------------------
+#
+# estimate_motion_blur()'s cepstral peak and blind estimate_defocus_radius()
+# both answer "if there IS a kernel, what does it look like" - neither is a
+# reliable answer to "is there a kernel at all." Real photographs have
+# periodic structure everywhere (carpet weave, screw threads, bottle rims)
+# that produces cepstral dips and harmonics indistinguishable from genuine
+# motion blur, and a free-affine-term curve fit can find a small nonzero
+# defocus radius that "improves" the fit on pure noise. Found by running the
+# blind decision below (motion checked first, gated only on the blended
+# cepstral confidence) against real MVTec images across every degradation
+# family: it classified every single eval example as "motion", including
+# images degraded by illumination/noise/jpeg alone, which have no blur at
+# all. That is a design flaw in the decision procedure, not a threshold that
+# needed nudging - see the two functions below.
+
+def _highfreq_deficit(logp: np.ndarray, band: slice, ref_logpsd: np.ndarray) -> float:
+    """Mean high-frequency log-power lost relative to the category's clean
+    reference. Blur suppresses high-frequency energy; periodic texture does
+    not, because the SAME texture is present in the reference too. Positive
+    = energy lost (blur-consistent). This is the one test in this file that
+    periodic real-world structure cannot fake, because it's a difference
+    against an image of the same physical content, not a property of this
+    image alone."""
+    ratio = logp - np.asarray(ref_logpsd, np.float32)
+    return float(-np.mean(ratio[band]))
+
+
+def _detect_blur_reference(img: np.ndarray, ref_logpsd: np.ndarray,
+                           deficit_margin: float = 1.0,
+                           fit_improvement_margin: float = 0.3,
+                           min_radius: float = 1.5,
+                           min_length: float = 5.0,
+                           max_radius: float = 8.0
+                           ) -> tuple[str, float, float, float]:
+    """Reference-based blur presence/type decision - the primary path
+    whenever a category reference is available.
+
+    Three gates, all required:
+      1. deficit_margin - the image must actually be missing high-frequency
+         energy relative to its own class's clean reference, by a real
+         margin (in log-power / nats). This is the physical test periodic
+         texture cannot mimic.
+      2. fit_improvement_margin - among the candidate kernel families
+         (defocus, motion), the winning one must substantially reduce the
+         fit residual against the deficit curve versus explaining nothing.
+         A deficit can be real without matching any of our kernel shapes
+         (e.g. sensor-level softening, or - found empirically - highlight
+         clipping from strong exposure changes, which produces a broadband
+         high-frequency deficit that a very small defocus radius fits well
+         enough to pass a loose version of this gate).
+      3. min_radius / min_length - the winning kernel must be non-trivially
+         sized. Found empirically: exposure-clipping's spurious "best fit"
+         defocus radius clustered right around 1.0px, indistinguishable in
+         size from a genuine severity-1 defocus blur (DEFOCUS_RADIUS[0] is
+         also 1.0px) - the deficit-shape gate alone doesn't separate them,
+         because at that size they really do look similar. Requiring a
+         larger minimum trades away severity-1 sensitivity (severity-1
+         defocus, true radius 1.0px, now goes undetected) for rejecting
+         this specific false-positive mode; severity 2+ (radius >=2px) is
+         unaffected. Motion's floor mirrors _motion_cepstral_peak's own
+         min_len=6px cepstral search floor - lengths below that were never
+         reliably estimated in the first place, so this costs nothing
+         beyond what min_len already cost.
+
+    Returns (blur_kind, blur_radius, blur_length, blur_angle).
+    """
+    from src.degrade.simulator import defocus_kernel, motion_kernel
+
+    freq, power = radial_psd(img)
+    logp = np.log(np.maximum(power, EPS))
+    band = _signal_band(freq, logp)
+    ratio = logp - np.asarray(ref_logpsd, np.float32)
+
+    deficit = _highfreq_deficit(logp, band, ref_logpsd)
+    if deficit < deficit_margin:
+        return "none", 0.0, 0.0, 0.0
+
+    mse_none = float(np.mean(ratio[band] ** 2))
+
+    r_best, _ = estimate_defocus_radius(img, max_radius=max_radius, ref_logpsd=ref_logpsd)
+    if r_best >= min_radius:
+        model = 2.0 * np.log(_radial_mtf(defocus_kernel(r_best), freq))
+        mse_defocus = float(np.mean((ratio[band] - model[band]) ** 2))
+    else:
+        r_best, mse_defocus = 0.0, mse_none
+
+    peak = _motion_cepstral_peak(img)
+    if peak["length"] >= min_length:
+        model = 2.0 * np.log(_radial_mtf(motion_kernel(peak["length"], peak["angle"]), freq))
+        mse_motion = float(np.mean((ratio[band] - model[band]) ** 2))
+    else:
+        mse_motion = mse_none
+
+    best_kind, best_mse = "none", mse_none
+    if mse_defocus < best_mse:
+        best_kind, best_mse = "defocus", mse_defocus
+    if mse_motion < best_mse:
+        best_kind, best_mse = "motion", mse_motion
+
+    improvement = (mse_none - best_mse) / (mse_none + EPS)
+    if best_kind == "none" or improvement < fit_improvement_margin:
+        return "none", 0.0, 0.0, 0.0
+    if best_kind == "defocus":
+        return "defocus", r_best, 0.0, 0.0
+    return "motion", 0.0, peak["length"], peak["angle"]
+
+
+def _detect_blur_blind(img: np.ndarray,
+                       prominence_floor: float = 0.75,
+                       harm_floor: float = 0.5,
+                       shape_coef_floor: float = 0.4,
+                       defocus_min_radius: float = 1.5,
+                       max_radius: float = 8.0) -> tuple[str, float, float, float]:
+    """Blind fallback for when no category reference exists yet. "No blur"
+    is the default outcome, not a rare one: motion is only accepted if the
+    cepstral prominence AND the harmonic confirmation AND a shape-consistency
+    check against the image's own spectrum all agree; if any one disagrees,
+    report no blur. All three thresholds are deliberately far stricter than
+    the reference-mode gates, since without a reference this whole
+    procedure is guessing at what "no blur" would have looked like for this
+    specific image rather than measuring it directly.
+    """
+    from src.degrade.simulator import motion_kernel
+
+    freq, power = radial_psd(img)
+    logp = np.log(np.maximum(power, EPS))
+    band = _signal_band(freq, logp)
+
+    peak = _motion_cepstral_peak(img)
+    if (peak["length"] >= 2.0 and peak["prominence"] >= prominence_floor
+            and peak["harm"] >= harm_floor):
+        coef2, improvement = _blind_shape_fit(freq, logp, band,
+                                              motion_kernel(peak["length"], peak["angle"]))
+        if coef2 >= shape_coef_floor and improvement > 0:
+            return "motion", 0.0, peak["length"], peak["angle"]
+
+    d_rad, d_conf = estimate_defocus_radius(img, max_radius=max_radius, ref_logpsd=None)
+    if d_rad >= defocus_min_radius and d_conf >= prominence_floor:
+        return "defocus", d_rad, 0.0, 0.0
+
+    return "none", 0.0, 0.0, 0.0
+
+
+def _blind_shape_fit(freq: np.ndarray, logp: np.ndarray, band: slice,
+                     kernel: np.ndarray) -> tuple[float, float]:
+    """Blind (no-reference) shape-consistency check: fit the image's own
+    log-PSD with a free affine term (absorbing the unknown natural-image
+    spectral slope) PLUS the candidate kernel's frequency response, and
+    return (kernel coefficient, fractional improvement over the affine-only
+    fit). Mirrors the free-affine-term regression estimate_defocus_radius
+    already uses in blind mode, generalised to any kernel - a real kernel
+    should explain a meaningful share of the high-frequency roll-off beyond
+    what a generic power-law prior already explains; periodic texture
+    produces a strong cepstral peak but does not reshape the broadband
+    roll-off this way.
+    """
+    f = np.maximum(freq[band], 1e-3)
+    y = logp[band]
+    base = np.stack([np.ones_like(f), np.log(f)], axis=1)
+    model = 2.0 * np.log(_radial_mtf(kernel, freq))
+
+    coef0, *_ = np.linalg.lstsq(base, y, rcond=None)
+    mse_base = float(np.mean((y - base @ coef0) ** 2))
+
+    A = np.concatenate([base, model[band][:, None]], axis=1)
+    coef, *_ = np.linalg.lstsq(A, y, rcond=None)
+    mse_full = float(np.mean((y - A @ coef) ** 2))
+
+    improvement = (mse_base - mse_full) / (mse_base + EPS)
+    return float(coef[2]), improvement
 
 
 # --------------------------------------------------------------------------
@@ -430,14 +642,23 @@ def estimate_jpeg_qf(img: np.ndarray, min_excess: float = 0.18) -> int:
 
 def estimate(img: np.ndarray,
              poly_degree: int = 3,
-             motion_conf_thresh: float = 0.25,
-             defocus_min_radius: float = 0.75,
-             ref_logpsd: np.ndarray | None = None) -> DegradationEstimate:
+             ref_logpsd: np.ndarray | None = None,
+             deficit_margin: float = 1.0,
+             fit_improvement_margin: float = 0.3,
+             prominence_floor: float = 0.75,
+             harm_floor: float = 0.5,
+             shape_coef_floor: float = 0.4) -> DegradationEstimate:
     """Run the full defect-blind estimation chain on one image.
 
-    Pass `ref_logpsd` (from reference_psd() over that category's clean training
-    normals) whenever it is available - blur estimation is substantially more
-    accurate with it.
+    Pass `ref_logpsd` (from reference_psd() over that category's clean
+    training normals) whenever it is available - it is the PRIMARY blur
+    detection path, not just an accuracy boost: blur suppresses high-
+    frequency energy relative to the reference, a direct physical test that
+    periodic real-world texture (carpet weave, screw threads, bottle rims)
+    cannot mimic, because the same texture is present in the reference too.
+    Without a reference, blur detection falls back to a much more
+    conservative blind decision where "no blur" is the default outcome, not
+    a rare one - see _detect_blur_reference / _detect_blur_blind.
     """
     est = DegradationEstimate()
 
@@ -445,19 +666,19 @@ def estimate(img: np.ndarray,
     est.illum_field, est.illum_ev = estimate_illumination(img, degree=poly_degree)
     est.jpeg_qf = estimate_jpeg_qf(img)
 
-    # decide blur type: motion evidence wins if the cepstral peak is confident
-    m_len, m_ang, m_conf = estimate_motion_blur(img)
-    d_rad, _ = estimate_defocus_radius(img, ref_logpsd=ref_logpsd)
-
-    if m_conf >= motion_conf_thresh and m_len >= 2.0:
-        est.blur_kind = "motion"
-        est.blur_length = m_len
-        est.blur_angle = m_ang
-    elif d_rad >= defocus_min_radius:
-        est.blur_kind = "defocus"
-        est.blur_radius = d_rad
+    if ref_logpsd is not None:
+        kind, radius, length, angle = _detect_blur_reference(
+            img, ref_logpsd, deficit_margin=deficit_margin,
+            fit_improvement_margin=fit_improvement_margin)
     else:
-        est.blur_kind = "none"
+        kind, radius, length, angle = _detect_blur_blind(
+            img, prominence_floor=prominence_floor, harm_floor=harm_floor,
+            shape_coef_floor=shape_coef_floor)
+
+    est.blur_kind = kind
+    est.blur_radius = radius
+    est.blur_length = length
+    est.blur_angle = angle
 
     return est
 

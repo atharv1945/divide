@@ -87,7 +87,7 @@ def test_divide_restorer_without_checkpoint_fails_loudly():
         r(_img())
     msg = str(exc.value)
     assert PCIM_WEIGHTS in msg
-    assert "no training script has been written" in msg.lower()
+    assert "train_pcim" in msg.lower()
 
 
 def test_divide_is_listed_in_available_restorers():

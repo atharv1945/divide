@@ -181,7 +181,8 @@ class ProxCNN(nn.Module):
 class PCIM(nn.Module):
     def __init__(self, n_iters: int = 5, rho0: float = 1.0, rho_scale: float = 2.0,
                  channels: int = 3, prox_width: int = 24, prox_depth: int = 4,
-                 illum_clamp: float = 4.0, vst_gain: float = 1.0):
+                 illum_clamp: float = 4.0, vst_gain: float = 1.0,
+                 nsr_floor: float = 0.01):
         super().__init__()
         if not (4 <= n_iters <= 6):
             raise ValueError(f"n_iters should be 4-6 per spec, got {n_iters}")
@@ -190,6 +191,21 @@ class PCIM(nn.Module):
         self.rho_scale = rho_scale
         self.illum_clamp = illum_clamp
         self.vst_gain = vst_gain
+        # Floor on the sigma fed to the WIENER regularisation term specifically
+        # (rho*sigma^2 in wiener_data_step's denominator) - NOT on the sigma
+        # used by the VST, which needs the true estimated noise level to
+        # variance-stabilise correctly. DBDE's noise estimate is frequently
+        # near its own numerical floor on real images (median ~2e-4 in one
+        # overnight run), which makes rho*sigma^2 negligible next to |otf|^2
+        # and lets Wiener behave like an unregularised inverse filter -
+        # catastrophic at any frequency where the kernel has near-zero
+        # response. nsr_floor is a floor on sigma^2 (matching "nsr" in the
+        # classical sense: the term added to |K|^2 in the denominator), so
+        # the effective sigma used for Wiener is max(sigma, sqrt(nsr_floor)).
+        # Config-driven (model.nsr_floor in configs/train_pcim_*.yaml) -
+        # deliberately not derived from the estimate alone, since the
+        # estimate is exactly what's being distrusted here.
+        self.nsr_floor = nsr_floor
         self.prox = ProxCNN(channels, prox_width, prox_depth)
         self._alpha_raw = nn.Parameter(torch.tensor(0.0))  # sigmoid(0) = 0.5 at init
 
@@ -200,14 +216,19 @@ class PCIM(nn.Module):
     def prox_param_count(self) -> int:
         return sum(p.numel() for p in self.prox.parameters())
 
-    def _hqs(self, v: torch.Tensor, otf: torch.Tensor, sigma: torch.Tensor,
+    def _hqs(self, v: torch.Tensor, otf: torch.Tensor | None, sigma: torch.Tensor,
             gate: float) -> torch.Tensor:
         """Run the unrolled recursion. gate=0 -> pure data step (linear,
-        content-agnostic). gate=1 -> data step then full prox each iteration."""
+        content-agnostic). gate=1 -> data step then full prox each iteration.
+
+        otf=None means "no blur was detected - skip the Wiener data step
+        entirely" (see forward()'s docstring on why this must be an actual
+        skip, not a deconvolution against an identity kernel)."""
         x = v
         for t in range(self.n_iters):
-            rho_t = self.rho0 * (self.rho_scale ** t)
-            x = wiener_data_step(v, x, otf, sigma, rho_t)
+            if otf is not None:
+                rho_t = self.rho0 * (self.rho_scale ** t)
+                x = wiener_data_step(v, x, otf, sigma, rho_t)
             if gate != 0.0:
                 z = self.prox(x)
                 x = gate * z + (1.0 - gate) * x
@@ -219,7 +240,18 @@ class PCIM(nn.Module):
         """
         y: (B,C,H,W) degraded image, float in [0,1]
         illum_field: (B,1,H,W) or (B,H,W) or None (no illumination correction)
-        kernel: (B,1,kh,kw) or None (no blur - identity kernel)
+        kernel: (B,1,kh,kw), or None if no blur was detected. None means
+            SKIP the Wiener data step entirely - "doing nothing" (beyond
+            illumination/VST) must always be an available output, not
+            approximated by deconvolving against an identity kernel. The two
+            are not equivalent under noise: an identity-kernel Wiener pass
+            still divides by (1 + rho*sigma^2) every iteration, which is
+            harmless at a sane sigma but is one more opportunity for a bad
+            sigma estimate to do damage for no physical reason, since there
+            is nothing to deconvolve. Callers (train_pcim.py,
+            divide_restorer.py) pass kernel=None precisely when DBDE's
+            blur_kind is "none" - see src/dbde/estimator.py's blur-decision
+            functions.
         sigma: (B,) or (B,1,1,1) or scalar - DBDE-estimated noise sigma
 
         Returns (x_full, x_cons), both (B,C,H,W).
@@ -228,19 +260,20 @@ class PCIM(nn.Module):
         if not torch.is_tensor(sigma):
             sigma = torch.as_tensor(sigma, dtype=y.dtype, device=y.device)
         sigma = sigma.to(y.dtype).reshape(b, *([1] * (y.dim() - 1))) if sigma.numel() == b else sigma
+        sigma_wiener = sigma.clamp(min=self.nsr_floor ** 0.5)
 
         x = illumination_divide(y, illum_field, self.illum_clamp) if illum_field is not None else y
         v = generalized_anscombe(x, sigma, self.vst_gain)
 
         if kernel is not None:
             otf = _kernel_to_otf(kernel, h, w)
+            if otf.shape[1] == 1 and c > 1:
+                otf = otf.expand(b, c, h, w)
         else:
-            otf = identity_otf((b, c), h, w, y.dtype, y.device)
-        if otf.shape[1] == 1 and c > 1:
-            otf = otf.expand(b, c, h, w)
+            otf = None
 
-        v_full = self._hqs(v, otf, sigma, gate=1.0)
-        v_cons = self._hqs(v, otf, sigma, gate=0.0)
+        v_full = self._hqs(v, otf, sigma_wiener, gate=1.0)
+        v_cons = self._hqs(v, otf, sigma_wiener, gate=0.0)
 
         x_full = inverse_generalized_anscombe(v_full, sigma, self.vst_gain)
         x_cons = inverse_generalized_anscombe(v_cons, sigma, self.vst_gain)
@@ -250,3 +283,30 @@ class PCIM(nn.Module):
             x_cons = illumination_restore(x_cons, illum_field, self.illum_clamp)
 
         return x_full, x_cons
+
+
+def assert_physics_sane(x_cons_dremr: float, floor: float = -0.5) -> None:
+    """x_cons is the alpha=0 path: illumination divide, VST, closed-form
+    Wiener, inverse VST - nothing learned. It has no mechanism to make
+    training-driven excuses for being wrong, so if its DRemR on held-out
+    data is far below "did nothing" (DRemR=0 by construction), that is
+    always a physics-chain bug, not a training issue, and it should stop
+    the run loudly rather than be silently absorbed by the learned prox
+    over the following hours - which is exactly what happened before this
+    check existed. Called from train_pcim.py's evaluate() every eval_every
+    steps.
+    """
+    if x_cons_dremr < floor:
+        raise RuntimeError(
+            f"\n{'=' * 70}\n"
+            f"PHYSICS SANITY CHECK FAILED: x_cons DRemR = {x_cons_dremr:.3f}, "
+            f"below the floor of {floor}.\n"
+            f"x_cons has no learned component - illumination divide, VST, "
+            f"closed-form Wiener, inverse VST only. A DRemR this negative "
+            f"means the PURE PHYSICS PATH is destroying the image, not the "
+            f"learned prox or L_pres. Do not retune loss weights for this - "
+            f"see src/experiments/bisect_pcim.py to isolate which physics "
+            f"stage is responsible (illumination / VST / Wiener) before "
+            f"changing anything.\n"
+            f"{'=' * 70}"
+        )

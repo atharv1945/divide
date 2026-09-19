@@ -1,14 +1,21 @@
 """DIVIDE itself as a Restorer - DBDE estimate -> PCIM -> (optional SARG blend).
 
 Needs a trained PCIM checkpoint (and optionally a trained SARG checkpoint).
-Neither has ever been trained - PCIM training is explicitly GPU work (see
-README's cost table) and no training script has been written yet either
-(losses.py/pcim.py/sarg.py are the building blocks; wiring a training loop
-around degrade_pair() counterfactual pairs is the next piece of glue, left
-for the GPU machine - see HANDOFF.md). This module exists so the "divide"
-restorer name is registered and behaves like every other unavailable deep
-method: it fails loudly naming the exact missing file, rather than being
-silently absent from get_restorer()/available_restorers().
+Neither has ever been trained to convergence - training is explicitly GPU
+work (see README's cost table). src.experiments.train_pcim now exists and
+writes checkpoints/pcim.pt; this module just hasn't had a real one to load
+yet. This module exists so the "divide" restorer name is registered and
+behaves like every other unavailable deep method: it fails loudly naming
+the exact missing file, rather than being silently absent from
+get_restorer()/available_restorers().
+
+Uses DBDE's blind (no reference) blur detection, not the reference-based
+primary path - this Restorer's interface is just img -> img with no
+category context to look up a cached reference_psd() against. Training
+(train_pcim.py) uses the reference path, since it does have category
+context; if this restorer needs to match that accuracy for real inference,
+it will need a category argument threaded through, which the eval grid /
+demo callers don't currently pass.
 """
 from __future__ import annotations
 
@@ -26,11 +33,8 @@ def _missing_message() -> str:
         f"Restorer 'divide' has no trained PCIM checkpoint.\n"
         f"Expected at: {checkpoints_dir() / PCIM_WEIGHTS}\n"
         f"No pretrained weights exist to download for this one - it's this "
-        f"project's own model. Train it with src.models.pcim.PCIM and the "
-        f"losses in src.models.losses (L_rec/L_deg/L_freq/L_pres), using "
-        f"counterfactual pairs from src.degrade.simulator.degrade_pair(). "
-        f"No training script has been written yet; see HANDOFF.md for what "
-        f"that needs to wire together.\n"
+        f"project's own model. Train it with:\n"
+        f"  python -m src.experiments.train_pcim --config configs/train_pcim_gpu.yaml\n"
         f"To run without it, drop 'divide' from the config's `restorers` list.\n"
         f"{'=' * 70}"
     )
@@ -56,8 +60,12 @@ def _restore(img: np.ndarray) -> np.ndarray:
 
     y = torch.from_numpy(img.transpose(2, 0, 1)).unsqueeze(0).float()
     illum = torch.from_numpy(est.illum_field).unsqueeze(0).unsqueeze(0).float()
-    kernel = torch.from_numpy(est.kernel()).unsqueeze(0).unsqueeze(0).float()
-    sigma = torch.tensor([est.noise_sigma], dtype=torch.float32)
+    # None when no blur was detected - PCIM.forward() skips the Wiener data
+    # step entirely for None rather than deconvolving against a fake
+    # identity kernel; see pcim.py's forward() docstring.
+    kernel = (torch.from_numpy(est.kernel()).unsqueeze(0).unsqueeze(0).float()
+             if est.blur_kind != "none" else None)
+    sigma = torch.tensor([max(est.noise_sigma, 1e-4)], dtype=torch.float32)
 
     sarg_path = checkpoints_dir() / SARG_WEIGHTS
     with torch.no_grad():
