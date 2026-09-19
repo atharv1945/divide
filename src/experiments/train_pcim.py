@@ -321,7 +321,6 @@ def evaluate(model: PCIM, eval_set: list[Example], device: str,
         n=len(eval_set),
         x_cons_dremr=x_cons_dremr,
         x_cons_psnr_normal=float(np.mean(cons_psnrs)) if cons_psnrs else float("nan"),
-        alpha=float(model.alpha.item()),
     )
     for kind, vals in rel_drrs_by_kind.items():
         out[f"relative_drr_{kind}"] = float(np.mean(vals)) if vals else float("nan")
@@ -459,7 +458,7 @@ def run(cfg: dict, run_name: str, device: str | None = None,
         loss_fields += [f"{k}_raw", f"{k}_scaled"]
     loss_csv = CsvLogger(results_dir() / f"{run_name}_losses.csv", loss_fields)
     eval_fields = ["step", "relative_drr", "dremr", "psnr_normal", "n",
-                  "x_cons_dremr", "x_cons_psnr_normal", "alpha"]
+                  "x_cons_dremr", "x_cons_psnr_normal"]
     eval_fields += [f"relative_drr_{k}" for k in ANOMALY_KINDS]
     eval_fields += ["blur_kind_none", "blur_kind_defocus", "blur_kind_motion"]
     eval_fields += [f"{k}_scaled" for k in LOSS_TERMS]

@@ -164,13 +164,7 @@ def test_prox_cnn_is_under_200k_params():
     assert model.prox_param_count() <= 200_000
 
 
-def test_alpha_is_learnable_and_bounded():
-    model = PCIM()
-    assert 0.0 <= model.alpha.item() <= 1.0
-    assert model._alpha_raw.requires_grad
-
-
-def test_gradients_flow_to_prox_and_alpha():
+def test_gradients_flow_to_prox():
     """At a fresh zero-init, gradient reaches the prox's LAST layer only -
     the standard "cold start" for a zero-initialised residual branch: with
     net[-1].weight=0, d(net_output)/d(net[-2]_output) = net[-1].weight^T =

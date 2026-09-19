@@ -32,12 +32,17 @@ differently:
                                                the "structural, not learned"
                                                half of the DIVIDE claim.
 
-SARG (not built yet) blends between the two per-pixel using a protection mask.
+SARG (src/models/sarg.py) blends between the two per-pixel using a learned
+protection mask: x = (1-m)*x_full + m*x_cons. That mask is where the
+full/conservative tradeoff is decided, and it varies by region.
 
-`alpha` is also exposed as a learned nn.Parameter (sigmoid-squashed to
-[0, 1]) for training a single deployable output between the two extremes;
-`forward()` always returns the x_full / x_cons pair regardless, since L_pres
-and SARG both need both.
+An earlier version of this module also exposed a single learned SCALAR gate
+(`alpha`, sigmoid-squashed) meant to blend x_full/x_cons into one deployable
+output. It was removed: a global per-image gate is redundant with - and
+would compete with - SARG's spatial gating, since how aggressively to
+restore should vary by region, not be one number per image. `forward()`
+always returns the x_full / x_cons pair; blending is SARG's job, not
+PCIM's.
 """
 from __future__ import annotations
 
@@ -222,26 +227,6 @@ class PCIM(nn.Module):
         # estimate is exactly what's being distrusted here.
         self.nsr_floor = nsr_floor
         self.prox = ProxCNN(channels, prox_width, prox_depth)
-        # -4.0 -> sigmoid ~0.018: starts near zero (closed, "trust physics"),
-        # same reasoning as ProxCNN's zero-init - a not-yet-useful learned
-        # gate should start inert, not at sigmoid(0)=0.5 as it did before.
-        # KNOWN GAP, flagged rather than silently left: forward() does not
-        # currently read self.alpha anywhere - x_full/x_cons are produced
-        # at hardcoded gate=1.0/0.0, not gate=self.alpha. That means this
-        # parameter has no path to any loss term and cannot receive a
-        # gradient, so - regardless of this init value - it is
-        # mathematically guaranteed to stay exactly where it starts for an
-        # entire training run. Logging it (train_pcim.py's eval CSV) is
-        # still cheap and still worth doing, but do not read a flat alpha
-        # trace as "physics winning" until this is actually wired into a
-        # loss term (e.g. a blended alpha*x_full+(1-alpha)*x_cons output
-        # included in L_rec) - that's a real design decision about what
-        # gets optimized, not made here.
-        self._alpha_raw = nn.Parameter(torch.tensor(-4.0))
-
-    @property
-    def alpha(self) -> torch.Tensor:
-        return torch.sigmoid(self._alpha_raw)
 
     def prox_param_count(self) -> int:
         return sum(p.numel() for p in self.prox.parameters())
