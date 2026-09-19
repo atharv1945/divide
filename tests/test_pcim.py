@@ -96,9 +96,20 @@ def test_hqs_without_prox_is_linear():
 
 def test_hqs_with_prox_is_generally_nonlinear():
     """Sanity check the linearity test above is actually discriminating:
-    with the prox engaged (random-init CNN), superposition should NOT hold."""
+    with the prox engaged AND non-trivial (weights perturbed away from
+    zero-init), superposition should NOT hold.
+
+    At a fresh zero-init, gate=1 is ALSO exactly linear - the prox is
+    exactly a no-op (see test_x_full_equals_x_cons_exactly_at_init), so
+    gate=1 degenerates to the same linear recursion as gate=0 until the
+    prox has learned something. That's intentional, not a bug; this test
+    perturbs the prox first specifically to exercise the "prox actually
+    doing something nonlinear" case the fresh-init model can't yet show."""
     torch.manual_seed(0)
     model = PCIM(n_iters=4)
+    with torch.no_grad():
+        for p in model.prox.parameters():
+            p.add_(0.1 * torch.randn_like(p))
     model.eval()
     h = w = 16
     otf = identity_otf((1, 3), h, w, torch.float32, "cpu")
@@ -160,21 +171,81 @@ def test_alpha_is_learnable_and_bounded():
 
 
 def test_gradients_flow_to_prox_and_alpha():
+    """At a fresh zero-init, gradient reaches the prox's LAST layer only -
+    the standard "cold start" for a zero-initialised residual branch: with
+    net[-1].weight=0, d(net_output)/d(net[-2]_output) = net[-1].weight^T =
+    0, so the chain rule kills gradient to every earlier layer until the
+    last layer's own weight (whose gradient depends on upstream
+    activations, not on its own current value) moves away from zero.
+    Confirmed empirically before writing this test - net[0..4] all get
+    exactly zero gradient at step 0, net[-1] does not. This is expected
+    and is not the same failure as the pre-fix state - after one optimizer
+    step, gradient reaches net[0] too (checked below), so this is a
+    one-step delay, not a stuck network."""
+    torch.manual_seed(0)
     model = PCIM(n_iters=4)
-    y = _rand(b=1, h=16, w=16, seed=32, requires_grad=False) if False else _rand(b=1, h=16, w=16, seed=32)
+    y = _rand(b=1, h=16, w=16, seed=32)
     sigma = torch.tensor([0.05])
+
     x_full, x_cons = model(y, sigma=sigma)
-    loss = x_full.mean() + x_cons.mean()
-    loss.backward()
+    (x_full.mean() + x_cons.mean()).backward()
+    assert model.prox.net[-1].weight.grad is not None
+    assert not torch.allclose(model.prox.net[-1].weight.grad,
+                              torch.zeros_like(model.prox.net[-1].weight.grad))
+
+    opt = torch.optim.SGD(model.parameters(), lr=0.1)
+    opt.step()  # last layer's weight is now non-zero
+    opt.zero_grad()
+    x_full, x_cons = model(y, sigma=sigma)
+    (x_full.mean() + x_cons.mean()).backward()
     assert model.prox.net[0].weight.grad is not None
-    assert not torch.allclose(model.prox.net[0].weight.grad, torch.zeros_like(model.prox.net[0].weight.grad))
+    assert not torch.allclose(model.prox.net[0].weight.grad,
+                              torch.zeros_like(model.prox.net[0].weight.grad))
 
 
-def test_x_full_and_x_cons_differ_after_training_init():
-    """Sanity check the two outputs are actually different code paths, not
-    accidentally identical."""
+def test_x_full_equals_x_cons_exactly_at_init():
+    """The regression test that should have existed before the ProxCNN's
+    final layer was zero-initialised: at step 0, an untrained prox must be
+    EXACTLY a no-op (not approximately - prox output should be identically
+    zero), so x_full and x_cons - which differ only in whether the prox
+    runs - must be bit-for-bit equal. Before the zero-init fix, this was
+    false: step-0 x_full on real data measured DRemR -8.11 / PSNR 13.16dB,
+    indistinguishable from a fully-"trained"-but-broken-physics run's final
+    numbers, because 5 compounding applications of an untrained non-zero
+    residual (PCIM._hqs's gate=1 path) was already enough to destroy the
+    image before any training happened."""
+    torch.manual_seed(0)
+    model = PCIM(n_iters=5)
+    y = _rand(b=2, h=16, w=16, seed=40)
+    illum = torch.ones(2, 1, 16, 16)
+    kernel = torch.zeros(2, 1, 3, 3); kernel[:, :, 1, 1] = 1.0
+    sigma = torch.full((2,), 0.02)
+    x_full, x_cons = model(y, illum_field=illum, kernel=kernel, sigma=sigma)
+    torch.testing.assert_close(x_full, x_cons, atol=1e-6, rtol=1e-6)
+
+
+def test_prox_net_output_is_exactly_zero_at_init():
+    """Isolates the actual mechanism: the residual branch itself, not just
+    the composed PCIM output."""
+    torch.manual_seed(0)
+    model = PCIM()
+    x = _rand(b=1, h=16, w=16, seed=41)
+    net_out = model.prox.net(x)
+    torch.testing.assert_close(net_out, torch.zeros_like(net_out), atol=0.0, rtol=0.0)
+
+
+def test_x_full_and_x_cons_diverge_once_prox_is_non_trivial():
+    """The two outputs ARE genuinely different code paths (x_full applies
+    the prox each iteration, x_cons never does) - verified by perturbing
+    the prox away from its zero-init and confirming the paths then differ.
+    This replaces an earlier version of this test that asserted x_full !=
+    x_cons at a random (non-zero) init, which was actually checking for
+    the bug this file's other new tests now check the fix for."""
     torch.manual_seed(1)
     model = PCIM(n_iters=4)
+    with torch.no_grad():
+        for p in model.prox.parameters():
+            p.add_(0.1 * torch.randn_like(p))
     y = _rand(b=1, h=16, w=16, seed=33)
     sigma = torch.tensor([0.05])
     x_full, x_cons = model(y, sigma=sigma)

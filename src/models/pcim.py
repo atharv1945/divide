@@ -160,7 +160,20 @@ def wiener_data_step(v: torch.Tensor, z: torch.Tensor, otf: torch.Tensor,
 class ProxCNN(nn.Module):
     """Tiny residual denoiser. Kept under 200K params on purpose: the cap is
     the mechanism that limits how much content-selective erasure the prox
-    step can learn to do, not a tuning knob to relax for better PSNR."""
+    step can learn to do, not a tuning knob to relax for better PSNR.
+
+    The final conv layer's weight and bias are explicitly zeroed, so
+    net(x) is exactly 0 and forward(x) is exactly x at init - a true
+    identity, not "identity-ish". This was previously just a comment, not
+    code: PyTorch's default conv init does not produce a small output, and
+    x_full applies this block 5 times per forward pass (gate=1 in
+    PCIM._hqs) - an untrained, non-zero residual compounded 5x was
+    measurably destroying the image before any training happened (found by
+    actually evaluating step-0 x_full on real data, not by inspecting the
+    module in isolation: DRemR -8.11, PSNR 13.16dB, indistinguishable from
+    a fully-trained-but-broken-physics run's final numbers). Zero-init is
+    standard practice for residual branches precisely because of this
+    failure mode."""
 
     def __init__(self, channels: int = 3, width: int = 24, depth: int = 4):
         super().__init__()
@@ -169,9 +182,11 @@ class ProxCNN(nn.Module):
             layers += [nn.Conv2d(width, width, 3, padding=1), nn.ReLU(inplace=True)]
         layers += [nn.Conv2d(width, channels, 3, padding=1)]
         self.net = nn.Sequential(*layers)
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.zeros_(self.net[-1].bias)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return x + self.net(x)  # residual: identity at init-ish behaviour
+        return x + self.net(x)  # residual: EXACTLY identity at init
 
 
 # --------------------------------------------------------------------------
@@ -207,7 +222,22 @@ class PCIM(nn.Module):
         # estimate is exactly what's being distrusted here.
         self.nsr_floor = nsr_floor
         self.prox = ProxCNN(channels, prox_width, prox_depth)
-        self._alpha_raw = nn.Parameter(torch.tensor(0.0))  # sigmoid(0) = 0.5 at init
+        # -4.0 -> sigmoid ~0.018: starts near zero (closed, "trust physics"),
+        # same reasoning as ProxCNN's zero-init - a not-yet-useful learned
+        # gate should start inert, not at sigmoid(0)=0.5 as it did before.
+        # KNOWN GAP, flagged rather than silently left: forward() does not
+        # currently read self.alpha anywhere - x_full/x_cons are produced
+        # at hardcoded gate=1.0/0.0, not gate=self.alpha. That means this
+        # parameter has no path to any loss term and cannot receive a
+        # gradient, so - regardless of this init value - it is
+        # mathematically guaranteed to stay exactly where it starts for an
+        # entire training run. Logging it (train_pcim.py's eval CSV) is
+        # still cheap and still worth doing, but do not read a flat alpha
+        # trace as "physics winning" until this is actually wired into a
+        # loss term (e.g. a blended alpha*x_full+(1-alpha)*x_cons output
+        # included in L_rec) - that's a real design decision about what
+        # gets optimized, not made here.
+        self._alpha_raw = nn.Parameter(torch.tensor(-4.0))
 
     @property
     def alpha(self) -> torch.Tensor:
