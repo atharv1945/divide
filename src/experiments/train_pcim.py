@@ -53,6 +53,7 @@ import argparse
 import csv
 import sys
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -246,7 +247,9 @@ def weighted_total(raw: dict[str, torch.Tensor], scale_factors: dict[str, float]
 
 @torch.no_grad()
 def evaluate(model: PCIM, eval_set: list[Example], device: str,
-            physics_check: bool = True, physics_floor: float = -0.5) -> dict[str, float]:
+            physics_check: bool = True, physics_floor: float = -0.5,
+            scale_factors: dict[str, float] | None = None,
+            cfg: dict | None = None) -> dict[str, float]:
     """Relative DRR is reported overall AND broken out per anomaly kind -
     scratches are the case that decides this project, and they're exactly
     what an aggregate mean would hide if they behaved worse than blobs/
@@ -261,6 +264,20 @@ def evaluate(model: PCIM, eval_set: list[Example], device: str,
     rather than be silently absorbed by hours of further training on top of
     it (see README/HANDOFF for exactly this happening before this check
     existed).
+
+    blur_kind_* counts come from the FIXED eval set's own DBDE estimates
+    (computed once, at build_eval_set() time, not re-estimated here) - they
+    won't change step to step unless the eval set itself changes, but
+    logging them at every eval row is still a real check: it keeps
+    detection behaviour visible in the same trace as the metrics it's
+    affecting, instead of something you'd only think to check if a run
+    already looked wrong.
+
+    If scale_factors and cfg are given, also computes the four SCALED loss
+    terms averaged over the eval set (not a noisy training batch) - the
+    same rec/deg/freq/pres_scaled quantities logged every training step,
+    but on a fixed set so the balance is comparable across the whole run in
+    one file, not split between losses.csv and eval.csv.
     """
     model.eval()
     rel_drrs, dremrs, psnrs = [], [], []
@@ -307,6 +324,20 @@ def evaluate(model: PCIM, eval_set: list[Example], device: str,
     )
     for kind, vals in rel_drrs_by_kind.items():
         out[f"relative_drr_{kind}"] = float(np.mean(vals)) if vals else float("nan")
+
+    blur_counts = Counter(ex.est.blur_kind for ex in eval_set)
+    for kind in ("none", "defocus", "motion"):
+        out[f"blur_kind_{kind}"] = blur_counts.get(kind, 0)
+
+    if scale_factors is not None and cfg is not None:
+        sums = {k: 0.0 for k in LOSS_TERMS}
+        for ex in eval_set:
+            raw = compute_raw_losses(model, ex, device)
+            _, scaled = weighted_total(raw, scale_factors, cfg)
+            for k in LOSS_TERMS:
+                sums[k] += float(scaled[k].detach()) / len(eval_set)
+        for k in LOSS_TERMS:
+            out[f"{k}_scaled"] = sums[k]
 
     if physics_check and np.isfinite(x_cons_dremr):
         assert_physics_sane(x_cons_dremr, floor=physics_floor)
@@ -429,6 +460,8 @@ def run(cfg: dict, run_name: str, device: str | None = None,
     eval_fields = ["step", "relative_drr", "dremr", "psnr_normal", "n",
                   "x_cons_dremr", "x_cons_psnr_normal"]
     eval_fields += [f"relative_drr_{k}" for k in ANOMALY_KINDS]
+    eval_fields += ["blur_kind_none", "blur_kind_defocus", "blur_kind_motion"]
+    eval_fields += [f"{k}_scaled" for k in LOSS_TERMS]
     eval_csv = CsvLogger(results_dir() / f"{run_name}_eval.csv", eval_fields)
 
     t0 = time.time()
@@ -472,7 +505,8 @@ def run(cfg: dict, run_name: str, device: str | None = None,
 
             if step % eval_every == 0 or step == total_steps:
                 last_eval = evaluate(model, eval_set, device,
-                                     physics_check=physics_check, physics_floor=physics_floor)
+                                     physics_check=physics_check, physics_floor=physics_floor,
+                                     scale_factors=scale_factors, cfg=cfg)
                 eval_csv.write(dict(step=step, **last_eval))
 
             if step % log_every == 0 or step == total_steps:
@@ -487,7 +521,8 @@ def run(cfg: dict, run_name: str, device: str | None = None,
 
     save_checkpoint(run_name, model, optimizer, step, rng, cfg, scale_factors)  # final state, always
     return last_eval if last_eval is not None else evaluate(
-        model, eval_set, device, physics_check=physics_check, physics_floor=physics_floor)
+        model, eval_set, device, physics_check=physics_check, physics_floor=physics_floor,
+        scale_factors=scale_factors, cfg=cfg)
 
 
 # --------------------------------------------------------------------------

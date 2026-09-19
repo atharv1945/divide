@@ -439,6 +439,29 @@ def estimate_defocus_radius(img: np.ndarray, max_radius: float = 8.0,
 # all. That is a design flaw in the decision procedure, not a threshold that
 # needed nudging - see the two functions below.
 
+# Known residual, not swept under the rug: strong illumination changes
+# (severity 4-5, under-exposure specifically) still produce a real,
+# non-trivial false-positive rate here (roughly 10-65% depending on
+# severity/direction, measured - see test_reference_blur_detection_on_
+# severe_illumination_is_bounded_not_zero). This is physically principled,
+# not a detector defect: severe under-exposure genuinely destroys high-
+# frequency content (quantisation and read noise swamp fine detail at low
+# signal), so the detector correctly observes an HF deficit and
+# misattributes its cause - a known hard case in blind deconvolution, not
+# a bug to chase with another threshold. The improve-margin distributions
+# for genuine severity-2 motion (0.49-0.95) and spurious under-exposure
+# "motion" (0.57-0.74) genuinely overlap; tightening further would trade
+# away real severity-2 motion sensitivity to suppress it.
+#
+# FUTURE WORK (not implemented - flagging only): illumination is already
+# estimated and corrected elsewhere in this module before blur matters to
+# anything downstream. Running blur detection on the illumination-
+# corrected image (rather than the raw one) should shrink exactly the
+# deficit that's fooling it here, since much of that deficit is the
+# exposure change itself, not a separate blur. Worth trying before
+# reaching for another threshold if this residual ever needs to shrink
+# further.
+
 def _highfreq_deficit(logp: np.ndarray, band: slice, ref_logpsd: np.ndarray) -> float:
     """Mean high-frequency log-power lost relative to the category's clean
     reference. Blur suppresses high-frequency energy; periodic texture does
