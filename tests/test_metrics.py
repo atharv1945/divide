@@ -8,7 +8,8 @@ import pytest
 
 from src.metrics.core import (
     auroc, average_precision, f1_max, psnr,
-    defect_retention_ratio, anomaly_contrast_gain, local_contrast,
+    defect_retention_ratio, defect_residual_correlation,
+    anomaly_contrast_gain, local_contrast,
     degradation_magnitude, degradation_removal_ratio, hallucinated_defect_rate,
     robustness_gap, gap_closed,
 )
@@ -105,6 +106,88 @@ def test_drr_only_looks_inside_mask():
 
     drr = defect_retention_ratio(ra, r0, clean_a, clean0, m)
     assert drr == pytest.approx(1.0, abs=1e-5)
+
+
+# ---------------------------------------------------------------- defect residual correlation
+
+def test_residual_correlation_identity_is_one():
+    """Perfect preservation: restored residual == true residual exactly ->
+    correlation 1.0 (not just DRR 1.0 - the shape matches too, trivially,
+    since it's the same signal)."""
+    clean0 = _base()
+    m = _mask()
+    mb = m.astype(bool)
+    clean_a = clean0.copy()
+    clean_a[mb] += RNG.normal(0, 0.15, size=int(mb.sum()))[:, None]  # textured defect, not flat
+
+    corr = defect_residual_correlation(clean_a, clean0, clean_a, clean0, m)
+    assert corr == pytest.approx(1.0, abs=1e-6)
+
+
+def test_residual_correlation_sign_flipped_is_minus_one():
+    clean0 = _base()
+    m = _mask()
+    mb = m.astype(bool)
+    clean_a = clean0.copy()
+    defect = RNG.normal(0, 0.15, size=int(mb.sum()))
+    clean_a[mb] += defect[:, None]
+
+    restored_0 = clean0.copy()
+    restored_a = clean0.copy()
+    restored_a[mb] -= defect[:, None]  # exactly the negated residual
+
+    corr = defect_residual_correlation(restored_a, restored_0, clean_a, clean0, m)
+    assert corr == pytest.approx(-1.0, abs=1e-6)
+
+
+def test_residual_correlation_near_zero_for_uncorrelated_noise_of_matched_magnitude():
+    """The case this metric exists for: DRR would read this as roughly
+    "preserved" (matched residual magnitude), but the restored residual's
+    SHAPE has nothing to do with the true defect - independent random
+    noise, not the defect's own signal."""
+    clean0 = _base(h=128, w=128)
+    m = np.zeros((128, 128), np.uint8)
+    m[20:108, 20:108] = 1  # large mask for a stable correlation estimate
+    mb = m.astype(bool)
+
+    true_defect = RNG.normal(0, 0.15, size=int(mb.sum()))
+    clean_a = clean0.copy()
+    clean_a[mb] += true_defect[:, None]
+
+    restored_0 = clean0.copy()
+    restored_a = clean0.copy()
+    ringing = RNG.normal(0, 0.15, size=int(mb.sum()))  # independent noise, matched sigma
+    restored_a[mb] += ringing[:, None]
+
+    drr = defect_retention_ratio(restored_a, restored_0, clean_a, clean0, m)
+    corr = defect_residual_correlation(restored_a, restored_0, clean_a, clean0, m)
+    assert drr == pytest.approx(1.0, rel=0.3)  # magnitude roughly matched - DRR alone looks fine
+    assert abs(corr) < 0.3                     # but the shape is unrelated
+
+
+def test_residual_correlation_empty_or_singleton_mask_is_nan():
+    z = _base()
+    assert np.isnan(defect_residual_correlation(z, z, z, z, np.zeros((64, 64), np.uint8)))
+    single = np.zeros((64, 64), np.uint8)
+    single[0, 0] = 1
+    assert np.isnan(defect_residual_correlation(z, z, z, z, single))
+
+
+def test_residual_correlation_only_looks_inside_mask():
+    clean0 = _base()
+    m = _mask()
+    mb = m.astype(bool)
+    clean_a = clean0.copy()
+    defect = RNG.normal(0, 0.15, size=int(mb.sum()))
+    clean_a[mb] += defect[:, None]
+
+    ra = clean_a.copy()
+    r0 = clean0.copy()
+    ra[0:5, 0:5] = 0.9  # noise far from the defect, outside the mask
+    r0[0:5, 0:5] = 0.2
+
+    corr = defect_residual_correlation(ra, r0, clean_a, clean0, m)
+    assert corr == pytest.approx(1.0, abs=1e-6)
 
 
 # ---------------------------------------------------------------- ACG

@@ -38,7 +38,7 @@ from src.degrade.simulator import FAMILIES, SEVERITIES, degrade_pair
 from src.dbde.estimator import estimate
 from src.experiments.eval_grid import CsvAppender
 from src.metrics.core import (
-    defect_retention_ratio, anomaly_contrast_gain,
+    defect_retention_ratio, defect_residual_correlation, anomaly_contrast_gain,
     degradation_removal_ratio, relative_drr, psnr, ssim,
 )
 from src.models.restorers import get_restorer, available_restorers
@@ -46,7 +46,7 @@ from src.utils.paths import dtd_root, figures_dir, results_dir
 
 ROW_FIELDS = [
     "category", "image", "anomaly_kind", "area_frac", "family", "severity",
-    "restorer", "tier", "drr", "acg", "dremr",
+    "restorer", "tier", "drr", "residual_corr", "acg", "dremr",
     "psnr_normal", "psnr_full", "ssim_full", "psnr_degraded",
 ]
 
@@ -147,6 +147,7 @@ def run(categories: list[str], restorers: list[str], families: list[str],
                                 break
 
                             drr = defect_retention_ratio(r_a, r_0, clean_a, clean0, mask)
+                            residual_corr = defect_residual_correlation(r_a, r_0, clean_a, clean0, mask)
                             acg = anomaly_contrast_gain(r_a, y_a, mask)
                             dremr = degradation_removal_ratio(r_a, y_a, clean_a, mask)
 
@@ -155,7 +156,7 @@ def run(categories: list[str], restorers: list[str], families: list[str],
                                 area_frac=float(mask.mean()),
                                 family=family, severity=sev, restorer=name,
                                 tier=R.tier,
-                                drr=drr, acg=acg, dremr=dremr,
+                                drr=drr, residual_corr=residual_corr, acg=acg, dremr=dremr,
                                 psnr_normal=psnr(r_a, clean_a, ~mask.astype(bool)),
                                 psnr_full=psnr(r_a, clean_a),
                                 ssim_full=ssim(r_a, clean_a),
@@ -208,6 +209,7 @@ def summarise(df: pd.DataFrame) -> pd.DataFrame:
         drr_rel_mean=("drr_rel", "mean"),
         drr_rel_median=("drr_rel", "median"),
         drr_rel_p10=("drr_rel", lambda s: s.quantile(0.10)),
+        residual_corr_mean=("residual_corr", "mean"),
         acg_mean=("acg", "mean"),
         dremr_mean=("dremr", "mean"),
         psnr_normal=("psnr_normal", "mean"),

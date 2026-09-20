@@ -114,6 +114,51 @@ def relative_drr(drr_method: float, drr_identity: float) -> float:
     return float(drr_method / drr_identity)
 
 
+def defect_residual_correlation(restored_anom: np.ndarray,
+                                restored_clean: np.ndarray,
+                                clean_anom: np.ndarray,
+                                clean_clean: np.ndarray,
+                                mask: np.ndarray) -> float:
+    """Pearson correlation between the restored residual and the true
+    residual, over mask pixels, both mean-centred within the mask - a
+    SHAPE check alongside DRR's magnitude check.
+
+    DRR (defect_retention_ratio) is ||got||/||want||, a ratio of
+    magnitudes. Two residuals can have matched magnitude while pointing in
+    completely different directions - e.g. ringing or hallucinated high-
+    frequency content sitting at the defect's location, with similar
+    energy to the true defect but no actual relationship to its shape -
+    and DRR cannot tell that apart from genuine preservation. This can:
+    it asks whether the restored residual's SHAPE tracks the true
+    residual's shape, not just its size.
+
+    1.0 = the restored residual is a positive scalar multiple of the true
+    residual - genuine preservation. 0.0 = uncorrelated - restoration
+    produced something with no relationship to the real defect (ringing,
+    hallucinated texture). -1.0 = anti-correlated (a sign-flipped
+    residual) - pathological, reported honestly rather than clamped.
+
+    Read alongside DRR, not instead of it: a restorer that does nothing
+    (identity) scores 1.0 on both. A restorer that erases the defect
+    scores near 0 on DRR and is typically near 0 or undefined here too
+    (little residual left to correlate against anything). The case this
+    metric exists for is DRR > 0 (residual energy present) but this near
+    0 (that energy isn't the defect's shape) - that combination is where
+    DRR alone would have been misread as preservation.
+    """
+    m = _as_bool(mask)
+    if m.sum() < 2:
+        return float("nan")
+    got = (_gray(restored_anom) - _gray(restored_clean))[m]
+    want = (_gray(clean_anom) - _gray(clean_clean))[m]
+    got = got - got.mean()
+    want = want - want.mean()
+    denom = float(np.sqrt(float((got ** 2).sum()) * float((want ** 2).sum())))
+    if denom <= EPS:
+        return float("nan")
+    return float(float((got * want).sum()) / denom)
+
+
 # --------------------------------------------------------------------------
 # PROPOSED METRIC 2 - Anomaly Contrast Gain
 # --------------------------------------------------------------------------
