@@ -9,15 +9,54 @@ Digital Image Processing (BCSE403L) course project. Atharv Agarwal, VIT Vellore.
 ## The claim
 
 Industrial inspection pipelines run `capture → restore → detect`. This project
-argues that step 2 is self-defeating: a restoration model is a denoiser, a
-defect is statistically a sparse local anomaly, so the restorer suppresses the
-evidence the detector needs.
+started from a broad argument: that step 2 is self-defeating in general —
+that a restoration model is a denoiser, a defect is statistically a sparse
+local anomaly, so any restorer suppresses the evidence the detector needs.
 
-DIVIDE replaces free-form restoration with **inverse degradation** — estimate a
-physical degradation model, apply its inverse. Because the inverse of a
-convolution, a smooth illumination field and an additive noise process is
-content-agnostic, it has no mechanism to treat a defect pixel differently from
-a normal one. Defect preservation becomes structural rather than hoped-for.
+**The go/no-go study (`results/drr_study_gonogo*`) tested that broad claim and
+did not support it.** A real, competently-functioning learned restorer —
+Restormer's `real_denoising` checkpoint, not a broken or out-of-distribution
+one — does genuine restoration (+2.3dB PSNR over doing nothing) while
+preserving defect signal (relative DRR 0.918 mean, 0.881 on scratches
+specifically). That is direct evidence against "learned natural-image priors
+erase sparse defects," not a gap in the test.
+
+What the same data shows instead is a clean split by **mechanism**, not by
+learned-vs-classical: restorers that deconvolve — invert a blur kernel —
+erode scratches severely (Wiener 0.335, a classical deconvolution pipeline
+0.516 relative DRR); restorers that merely denoise — attenuate high-frequency
+energy without inverting anything — do not (Restormer, NLM, Gaussian,
+bilateral: 0.88–0.98). The physical reason: deconvolution is an ill-posed
+inverse problem, so a deconvolving restorer necessarily uses a prior to
+decide what the sharp image *should* have looked like, and a sparse defect
+looks exactly like the thing that prior is trained to remove. Denoising has
+no such inversion step — it attenuates energy, and a defect with real
+contrast against its surroundings survives attenuation by construction.
+
+**The narrowed, supported claim: deblurring-class restoration erases sparse
+defects, because deconvolution is an ill-posed inverse that relies on a prior
+to decide what should have been there. DIVIDE performs deblurring in a way
+that structurally cannot do this**, because its inverse operator (the
+closed-form Wiener data step in PCIM's HQS recursion — no learned parameters)
+is content-agnostic: `tests/test_pcim.py::test_hqs_without_prox_is_linear`
+verifies this directly, showing the deconvolution path is provably an affine
+map of the input with the learned component gated off. DIVIDE was always a
+deconvolution method — the Wiener step is its core — so this is a narrower
+and sharper version of the original bet, not a retreat from it: it's
+supported by the most dramatic number this project has produced (0.335
+relative DRR for classical Wiener on scratches), it explains *why* naive
+restore-then-detect specifically fails in industrial settings, where motion
+blur and defocus are dominant degradations, and it says plainly where the
+broad claim does and doesn't hold rather than asserting it holds everywhere.
+
+A follow-up run (`results/drr_study_deblur*`, using Restormer's own
+Motion_Deblurring/Defocus_Deblurring checkpoints rather than its denoising
+one) is testing whether a *learned* deblurrer erodes defects the way
+classical Wiener does, or whether Wiener's erosion is instead a
+regularization artifact specific to the classical method. Both answers are
+reportable and neither changes the narrowed claim above, which rests on the
+classical result and DIVIDE's own structural argument either way — see
+`HANDOFF.md` for the running result once it lands.
 
 ---
 
@@ -29,13 +68,13 @@ a normal one. Defect preservation becomes structural rather than hoped-for.
 | Synthetic anomaly generator (texture / scratch / blob) | done, tested |
 | Metrics: DRR, relative DRR, ACG, HDR, DRemR, AUROC, AP, F1, gap_closed | done, tested |
 | DBDE — defect-blind degradation estimator | done, tested, **validated on real MVTec** — see `figures/dbde_*.png` |
-| DRR go/no-go study + figures | done, runs on CPU; **full classical-restorer run on real MVTec done** (`results/drr_study_real*.csv`) — not the verdict, a baseline |
+| DRR go/no-go study + figures | **done on real MVTec, CPU, including NAFNet/Restormer** (`results/drr_study_gonogo*.csv`) — see **The claim** above for the verdict and its two caveats; classical-only baseline also on disk (`results/drr_study_real*.csv`) |
 | Frozen-detector harness (PatchCore/PaDiM/ReverseDistillation/EfficientAd) | built, PaDiM verified on CPU; others fit+scored at least once but flaky in dev sandbox — **never run on real MVTec or a GPU** |
-| Deep restorer loaders (NAFNet/Restormer/DiffBIR) | built, fail-loud path tested; **restoration itself never run — no weights, no GPU** |
-| PCIM — physics-consistent inverse module | built, tested (incl. the structural content-agnostic claim); **never trained** |
+| Deep restorer loaders (NAFNet/Restormer/DiffBIR) | NAFNet/Restormer run in-process on CPU, no GPU needed (weights downloaded, ~2–7s/image) — see `src/models/deep_restorers.py`; **DiffBIR still needs a GPU**, excluded from CPU studies on compute grounds |
+| PCIM — physics-consistent inverse module | built, tested (incl. the structural content-agnostic claim); **trained on CPU** (`configs/train_pcim_cpu.yaml`, 15000 steps) — see `results/train_pcim_cpu_eval.csv` |
 | Losses — L_rec / L_deg / L_freq / L_pres | built, tested against the real counterfactual pipeline |
 | SARG — sparse anomaly-residual guard | built, tested; **never trained** |
-| PCIM training script (resumable, CSV-logged) | built, tested incl. a real kill-and-resume check; **never run to convergence — no GPU** |
+| PCIM training script (resumable, CSV-logged) | built, tested incl. a real kill-and-resume check; **run to completion on CPU** — GPU run still unmeasured |
 | L_pres ablation harness | built, tested (incl. the fairness-assertion that both runs differ ONLY in `use_lpres`); **never run at meaningful scale** |
 | Frozen-detector evaluation grid (resumable, CSV) | built, verified end-to-end on synthetic data; **never run on real MVTec** |
 | Gradio demo | built, panel logic + Blocks construction verified; **never run against real weights** |
@@ -108,9 +147,24 @@ Judge on **relative** DRR, not raw. Raw DRR also counts attenuation caused by
 the degradation itself, which no restorer is responsible for; the identity
 baseline scores ~0.87 raw and exactly 1.0 relative.
 
-**The classical restorers alone will not settle this.** The thesis is about
-learned natural-image priors. The verdict is only meaningful once NAFNet,
-Restormer and a diffusion model are in the run — those need weights and a GPU.
+**The classical restorers alone will not settle this.** The verdict is only
+meaningful once at least one competently-functioning learned restorer is in
+the run — NAFNet and Restormer both run in-process on CPU now (see
+`src/models/deep_restorers.py`; no GPU required, ~2–7s/image), DiffBIR is
+excluded on compute grounds (a full diffusion sampler, no realistic CPU path
+at this scope — see its `REPO_SPECS` entry for the reasoning).
+
+**Result** (`results/drr_study_gonogo*`, reduced scope: 3 categories, 3
+families, severities 2–4, 10 images, 2700 rows): raw pooled verdict
+NO-GO, but two of the nine non-identity restorers distort that number —
+msrcr/clahe are tone-mapping methods whose DRR > 1 reflects amplification
+artefacts, not preservation, and NAFNet-SIDD was out-of-distribution on
+these synthetic degradations (its own PSNR came back *worse* than the raw
+degraded input, 21.11 vs 22.84dB — a broken baseline, not evidence).
+Excluding both, the real result is a clean mechanism split, not a
+learned-vs-classical one — see **The claim** above for the full narrowed
+argument and the follow-up test (`results/drr_study_deblur*`) checking
+whether a learned deblurrer behaves like classical Wiener.
 
 ---
 

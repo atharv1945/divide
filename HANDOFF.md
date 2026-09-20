@@ -4,11 +4,49 @@ You have a GPU and (presumably) no context on this project beyond this document.
 
 ## What this project claims
 
-Industrial visual inspection pipelines run capture → restore → detect: a degraded photo gets cleaned up by a restoration model before a defect detector looks at it. This project argues that step is self-defeating. A restoration model — classical or deep — is fundamentally a denoiser, and a surface defect (a scratch, a stain, a dent) is statistically a sparse, spatially localized anomaly. To a model whose entire training objective is "make this image look like a clean, defect-free instance of its class," a defect *is* noise, and it gets erased along with the sensor noise, the blur, and the bad lighting. The detector then runs on an image that's been quietly cleaned of the exact evidence it needed.
+**This section was rewritten after the go/no-go study actually ran (CPU, no
+GPU needed in the end) and produced a real result — see README.md's "The
+claim" for the full argument and numbers. Summary below; don't skip the
+README section if you're deciding what to build next.**
 
-DIVIDE's fix is to stop trying to restore the image and instead invert the specific physical degradation that hit it — estimate the blur kernel, the illumination field, the noise level (via DBDE, already built and CPU-tested), and apply their mathematical inverses (via PCIM). The inverse of a convolution, a multiplicative illumination field, and additive noise is a fixed, content-agnostic operation: dividing by an illumination field doesn't know or care whether the pixel underneath is a defect or a shadow. That's the whole bet — preservation becomes a structural property of the inversion, not something you hope a learned model picked up. `tests/test_pcim.py::test_hqs_without_prox_is_linear` verifies this structurally: with PCIM's learned component turned off, its core operation is provably an affine map of the input, which is what makes "it can't learn to erase this defect" a claim about the math rather than a hope.
+The original, broader argument was: industrial visual inspection pipelines
+run capture → restore → detect, and that step is self-defeating in general —
+any restoration model, classical or deep, is fundamentally a denoiser, a
+surface defect is statistically a sparse anomaly, so a defect *is* noise to a
+model trained to reconstruct a clean instance of its class, and it gets
+erased along with genuine degradation.
 
-Whether the premise is even true — whether real restoration models actually destroy defect signal on real degraded industrial images — is exactly what you're about to go measure. That's the go/no-go stop below, and it is the most important thing in this document.
+**That broad version was tested and is not supported.** Restormer's
+`real_denoising` checkpoint — a real, competently-functioning learned
+restorer, not a broken one — does genuine restoration (+2.3dB PSNR) while
+preserving defect signal (relative DRR 0.918 mean, 0.881 on scratches). The
+data instead shows a mechanism split: restorers that **deconvolve** (invert
+a blur kernel) erode scratches severely — classical Wiener 0.335, a
+classical deconvolution pipeline 0.516 — while restorers that merely
+**denoise** (attenuate high-frequency energy without inverting anything) do
+not, learned or classical alike (Restormer, NLM, Gaussian, bilateral:
+0.88–0.98).
+
+**The narrowed, supported claim:** deblurring-class restoration erases
+sparse defects, because deconvolution is an ill-posed inverse problem that
+uses a prior to decide what the sharp image should have looked like, and a
+defect looks exactly like what that prior is trained to remove. DIVIDE
+performs deblurring in a way that structurally cannot do this — PCIM's
+Wiener data step is closed-form (no learned parameters), and
+`tests/test_pcim.py::test_hqs_without_prox_is_linear` verifies directly that
+the deconvolution path is a provably affine, content-agnostic map of the
+input. DIVIDE was always a deconvolution method (the Wiener step is its
+core), so this is a sharper version of the original bet, not a retreat: it's
+backed by the most dramatic number this project has produced (0.335 on
+scratches), and it explains why naive restore-then-detect specifically fails
+in industrial settings, where motion blur and defocus dominate.
+
+A follow-up run (`results/drr_study_deblur*`, Restormer's own
+Motion_Deblurring/Defocus_Deblurring checkpoints) is checking whether a
+*learned* deblurrer erodes defects the same way classical Wiener does, or
+whether Wiener's erosion is a regularization artifact specific to the
+classical method. Both answers are reportable; check README.md for whichever
+landed before you rely on this section.
 
 ## Setup
 
@@ -248,7 +286,7 @@ Ran to completion: 14,400 rows (3 categories × 20 images × 6 families × 5 sev
 
 The plain denoisers (bilateral/nlm/gaussian) sit close to 1.0 across every severity (`figures/drr_vs_severity.png`) — spatial smoothing alone doesn't do much to a scratch or blob at these degradation levels. The deconvolution-based methods (wiener, and `classical_pipeline`, which chains illumination correction, denoising, and Wiener deblurring) sit consistently around 0.5, worst at high severity (down to ~0.44 at severity 4-5) — deconvolution's ringing/sharpening measurably suppresses fine defect structure, most visibly for scratches specifically (`figures/drr_by_kind.png`: wiener's scratch column is its lowest of the three kinds). clahe/msrcr's numbers above 1.0 are not "better than identity" in any meaningful sense - their contrast stretching inflates the raw pixel-difference metric on both normal and defect regions alike (see their `dremr_mean` in `results/drr_study_real_summary.csv`, both strongly negative - they move *further* from the clean image than the degraded input already was).
 
-This is **not the go/no-go verdict** — classical restorers only, and the README says explicitly that classical restorers alone can't settle the question the project is actually about (learned natural-image priors). But it's a real, informative, real-data result: on this data, generic denoising leaves defects mostly intact, while anything that actively deconvolves (which is closer to what a deep restorer's learned prior effectively does) already erases about half the signal even in the classical case. That's a reasonable prior for what the deep restorers in step 2 might do, not a substitute for actually measuring it.
+At the time this was written, this was **not the go/no-go verdict** — classical restorers only, with the note that classical restorers alone can't settle the question the project is actually about. **That measurement has since happened** (`results/drr_study_gonogo*`, see "What this project claims" above): a real learned denoiser (Restormer) preserves defects the same way the classical denoisers here do, while classical deconvolution erodes them the same way it does here — confirming the split predicted by this table is about mechanism (deconvolve vs. denoise), not learned vs. classical. NAFNet's result in that run doesn't extend this table's pattern one way or the other - it was out-of-distribution on synthetic degradations (see the caveat in "What this project claims").
 
 ## Known fragile points
 
