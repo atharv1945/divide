@@ -218,6 +218,26 @@ def load_deep(name: str) -> Restorer | None:
 # registry
 # --------------------------------------------------------------------------
 
+def _wiener_dbde_nsr(img: np.ndarray) -> np.ndarray:
+    from src.models.wiener_ablation import wiener_dbde_nsr
+    return wiener_dbde_nsr(img)
+
+
+def _wiener_hqs_rawpixel(img: np.ndarray) -> np.ndarray:
+    from src.models.wiener_ablation import wiener_hqs_rawpixel
+    return wiener_hqs_rawpixel(img)
+
+
+def _wiener_hqs_vst(img: np.ndarray) -> np.ndarray:
+    from src.models.wiener_ablation import wiener_hqs_vst
+    return wiener_hqs_vst(img)
+
+
+def _wiener_hqs_vst_nofloor(img: np.ndarray) -> np.ndarray:
+    from src.models.wiener_ablation import wiener_hqs_vst_nofloor
+    return wiener_hqs_vst_nofloor(img)
+
+
 CLASSICAL: dict[str, Callable] = {
     "identity": identity,
     "clahe": clahe,
@@ -230,6 +250,15 @@ CLASSICAL: dict[str, Callable] = {
     "richardson_lucy": richardson_lucy,
     "unsharp": unsharp,
     "classical_pipeline": classical_pipeline,
+    # Bridging ablation: classical Wiener (config A = "wiener" above) ->
+    # PCIM's x_cons, one variable at a time - see
+    # src/models/wiener_ablation.py's module docstring for the full
+    # rationale (testing whether defect erosion is a property of
+    # regularization strength, not method class).
+    "wiener_dbde_nsr": _wiener_dbde_nsr,             # config B
+    "wiener_hqs_rawpixel": _wiener_hqs_rawpixel,     # config C
+    "wiener_hqs_vst": _wiener_hqs_vst,               # config D (= x_cons)
+    "wiener_hqs_vst_nofloor": _wiener_hqs_vst_nofloor,  # config E (reverse direction)
 }
 
 
