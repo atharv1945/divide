@@ -63,6 +63,28 @@ REPO_SPECS = {
         weights_rel_path="Denoising/pretrained_models/real_denoising.pth",
         note="Google Drive - see nafnet's note above, same fetch method (gdown or by hand).",
     ),
+    "restormer_motion_deblur": dict(
+        git="https://github.com/swz30/Restormer.git",
+        weights="motion_deblurring.pth",
+        weights_url="https://drive.google.com/drive/folders/1czMyfRTQDX3j3ErByYeZ1PM4GVLbJeGK",
+        weights_rel_path="Motion_Deblurring/pretrained_models/motion_deblurring.pth",
+        note=("Google Drive FOLDER, not a single file - the uc?id= single-file gdown trick "
+              "doesn't apply here. `pip install gdown` then `gdown --folder "
+              "'https://drive.google.com/drive/folders/1czMyfRTQDX3j3ErByYeZ1PM4GVLbJeGK' "
+              f"-O {{checkpoints_dir}}/restormer_motion_deblur_folder` downloads the whole "
+              "folder; move motion_deblurring.pth out to checkpoints_dir() directly."),
+    ),
+    "restormer_defocus_deblur": dict(
+        git="https://github.com/swz30/Restormer.git",
+        weights="single_image_defocus_deblurring.pth",
+        weights_url="https://drive.google.com/drive/folders/1bRBG8DG_72AGA6-eRePvChlT5ZO4cwJ4",
+        weights_rel_path="Defocus_Deblurring/pretrained_models/single_image_defocus_deblurring.pth",
+        note=("Google Drive FOLDER - contains BOTH single-image and dual-pixel variants. "
+              "Grab single_image_defocus_deblurring.pth specifically, NOT "
+              "dual_pixel_defocus_deblurring.pth (that one needs 6-channel stereo input, "
+              "a different task entirely). Same gdown --folder method as motion_deblur's "
+              "note above."),
+    ),
     "diffbir": dict(
         git="https://github.com/XPixelGroup/DiffBIR.git",
         weights="v2.pth",
@@ -166,22 +188,37 @@ def _load_nafnet() -> torch.nn.Module:
 
 
 @functools.lru_cache(maxsize=None)
-def _load_restormer() -> torch.nn.Module:
-    _check_weights("restormer")
+def _load_restormer_variant(spec_name: str, layer_norm_type: str) -> torch.nn.Module:
+    """Shared loader for every Restormer checkpoint (denoising, motion
+    deblur, defocus deblur): same architecture, different weights file and
+    LayerNorm_type - demo.py overrides LayerNorm_type to 'BiasFree' only
+    for the (real/gaussian) denoising tasks; deblurring tasks use the
+    architecture's own default, 'WithBias'."""
+    _check_weights(spec_name)
     _ensure_repo("restormer")
     arch_path = _repo_dir("restormer") / "basicsr" / "models" / "archs" / "restormer_arch.py"
     mod = runpy.run_path(str(arch_path))
-    # Params match demo.py's Real_Denoising branch - the task the
-    # downloaded real_denoising.pth checkpoint was trained for.
     params = dict(inp_channels=3, out_channels=3, dim=48, num_blocks=[4, 6, 6, 8],
                   num_refinement_blocks=4, heads=[1, 2, 4, 8],
                   ffn_expansion_factor=2.66, bias=False,
-                  LayerNorm_type="BiasFree", dual_pixel_task=False)
+                  LayerNorm_type=layer_norm_type, dual_pixel_task=False)
     model = mod["Restormer"](**params)
-    ckpt = torch.load(checkpoints_dir() / REPO_SPECS["restormer"]["weights"], map_location="cpu")
+    ckpt = torch.load(checkpoints_dir() / REPO_SPECS[spec_name]["weights"], map_location="cpu")
     model.load_state_dict(ckpt["params"], strict=True)
     model.eval()
     return model
+
+
+def _load_restormer() -> torch.nn.Module:
+    return _load_restormer_variant("restormer", "BiasFree")
+
+
+def _load_restormer_motion_deblur() -> torch.nn.Module:
+    return _load_restormer_variant("restormer_motion_deblur", "WithBias")
+
+
+def _load_restormer_defocus_deblur() -> torch.nn.Module:
+    return _load_restormer_variant("restormer_defocus_deblur", "WithBias")
 
 
 @torch.no_grad()
@@ -196,10 +233,10 @@ def _restore_nafnet(img: np.ndarray) -> np.ndarray:
 
 
 @torch.no_grad()
-def _restore_restormer(img: np.ndarray) -> np.ndarray:
+def _run_restormer(model: torch.nn.Module, img: np.ndarray) -> np.ndarray:
     """Restormer's forward does NOT self-pad (unlike NAFNet) - replicates
-    demo.py's manual pad-to-multiple-of-8-then-crop."""
-    model = _load_restormer()
+    demo.py's manual pad-to-multiple-of-8-then-crop. Shared by every
+    Restormer variant (denoising, motion deblur, defocus deblur)."""
     x = torch.from_numpy(np.ascontiguousarray(img.transpose(2, 0, 1))).unsqueeze(0).float()
     h, w = x.shape[-2:]
     m = 8
@@ -209,6 +246,36 @@ def _restore_restormer(img: np.ndarray) -> np.ndarray:
     y = model(x)
     y = torch.clamp(y, 0, 1)[:, :, :h, :w]
     return y.squeeze(0).permute(1, 2, 0).numpy()
+
+
+def _restore_restormer(img: np.ndarray) -> np.ndarray:
+    return _run_restormer(_load_restormer(), img)
+
+
+def _restore_restormer_motion_deblur(img: np.ndarray) -> np.ndarray:
+    return _run_restormer(_load_restormer_motion_deblur(), img)
+
+
+def _restore_restormer_defocus_deblur(img: np.ndarray) -> np.ndarray:
+    return _run_restormer(_load_restormer_defocus_deblur(), img)
+
+
+def _restore_restormer_deblur(img: np.ndarray) -> np.ndarray:
+    """Dispatches to the matching deblurring checkpoint by DBDE's blind
+    blur_kind estimate on THIS image - not a ground-truth family label, the
+    same way classical_pipeline/wiener_deconv decide whether and how to
+    deconvolve. blur_kind == 'none' (a miss, in a study scoped to
+    defocus/motion families) falls back to identity rather than forcing
+    either deblurring model onto an image it may not need it - mirrors
+    PCIM's own fail-safe of skipping the Wiener step entirely for 'none'
+    rather than deconvolving with a near-identity kernel."""
+    from src.dbde.estimator import estimate
+    est = estimate(img)
+    if est.blur_kind == "motion":
+        return _restore_restormer_motion_deblur(img)
+    if est.blur_kind == "defocus":
+        return _restore_restormer_defocus_deblur(img)
+    return img.copy()
 
 
 # --------------------------------------------------------------------------
@@ -282,7 +349,16 @@ def _restore_diffbir(img: np.ndarray) -> np.ndarray:
 _RESTORE_FN = {
     "nafnet": _restore_nafnet,
     "restormer": _restore_restormer,
+    "restormer_motion_deblur": _restore_restormer_motion_deblur,
+    "restormer_defocus_deblur": _restore_restormer_defocus_deblur,
     "diffbir": _restore_diffbir,
+}
+
+_EAGER_LOAD = {
+    "nafnet": _load_nafnet,
+    "restormer": _load_restormer,
+    "restormer_motion_deblur": _load_restormer_motion_deblur,
+    "restormer_defocus_deblur": _load_restormer_defocus_deblur,
 }
 
 
@@ -290,19 +366,19 @@ def build_deep_restorer(name: str):
     """Return a Restorer for `name`, or raise RuntimeError naming the exact fix.
 
     Weights are checked FIRST, before touching the network or a repo clone,
-    so a missing-weights report never depends on being online. NAFNet and
-    Restormer then load their model ONCE here (functools.lru_cache) - the
-    returned Restorer's fn is a plain forward pass, not a reload.
+    so a missing-weights report never depends on being online. Every
+    in-process model (nafnet, restormer and its two deblurring variants)
+    loads ONCE here (functools.lru_cache) - the returned Restorer's fn is a
+    plain forward pass, not a reload. diffbir is the one exception, still
+    a subprocess-CLI path (see module docstring for why).
     """
     from src.models.restorers import Restorer  # local import, avoids a cycle
 
     if name not in REPO_SPECS:
         raise KeyError(f"unknown deep restorer {name!r}. known: {sorted(REPO_SPECS)}")
 
-    if name == "nafnet":
-        _load_nafnet()  # raises with the download message if weights are absent
-    elif name == "restormer":
-        _load_restormer()
+    if name in _EAGER_LOAD:
+        _EAGER_LOAD[name]()  # raises with the download message if weights are absent
     else:
         _check_weights(name)
         _ensure_repo(name)
@@ -311,3 +387,18 @@ def build_deep_restorer(name: str):
     fn = _RESTORE_FN[name]
     needs_gpu = name == "diffbir"
     return Restorer(name, fn, tier="deep", needs_gpu=needs_gpu)
+
+
+def build_restormer_deblur_restorer():
+    """The composed 'does a LEARNED deblurrer erase defects the way
+    classical deconvolution does' restorer: dispatches per-image to
+    Restormer's matching motion/defocus deblurring checkpoint via DBDE's
+    blur_kind estimate (see _restore_restormer_deblur's docstring for why
+    that, not a ground-truth family label). Not a REPO_SPECS entry itself -
+    it depends on BOTH sub-checkpoints, so both are weight-checked here
+    before either is touched, same "fail loud before doing anything online-
+    dependent" ordering as build_deep_restorer."""
+    from src.models.restorers import Restorer
+    _check_weights("restormer_motion_deblur")
+    _check_weights("restormer_defocus_deblur")
+    return Restorer("restormer_deblur", _restore_restormer_deblur, tier="deep", needs_gpu=False)

@@ -239,17 +239,29 @@ def get_restorer(name: str) -> Restorer:
     if name == "divide":
         from src.models.divide_restorer import build_divide_restorer
         return build_divide_restorer()
+    if name == "restormer_deblur":
+        # Not a DEEP_SPECS entry - it composes restormer_motion_deblur and
+        # restormer_defocus_deblur, dispatching per image by DBDE's
+        # blur_kind estimate (see deep_restorers.build_restormer_deblur_
+        # restorer's docstring). Same deferred-error contract as
+        # load_deep() below: get_restorer() itself never raises, the
+        # RuntimeError fires when the returned Restorer is CALLED.
+        from src.models.deep_restorers import build_restormer_deblur_restorer
+        try:
+            return build_restormer_deblur_restorer()
+        except RuntimeError as e:
+            return Restorer(name, _deep_unavailable(name, e), tier="deep", needs_gpu=False)
     deep = load_deep(name)
     if deep is not None:
         return deep
     raise KeyError(
         f"unknown restorer {name!r}. "
-        f"classical: {sorted(CLASSICAL)} | deep: {sorted(DEEP_SPECS)} | divide"
+        f"classical: {sorted(CLASSICAL)} | deep: {sorted(DEEP_SPECS)} | divide | restormer_deblur"
     )
 
 
 def available_restorers(include_deep: bool = False) -> list[str]:
     names = sorted(CLASSICAL)
     if include_deep:
-        names += sorted(DEEP_SPECS) + ["divide"]
+        names += sorted(DEEP_SPECS) + ["divide", "restormer_deblur"]
     return names

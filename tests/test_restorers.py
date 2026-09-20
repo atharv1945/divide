@@ -53,17 +53,18 @@ def test_deep_restorer_without_weights_fails_loudly_with_url(name, tmp_path, mon
     dev machine actually lacking weights (nafnet/restormer's ARE present
     here now - see test_deep_restorer_with_real_weights_runs below).
 
-    nafnet/restormer's loaders are functools.lru_cache'd with no arguments
-    (load once, reuse forever within a process - see deep_restorers.py) so
-    a real successful load anywhere earlier in this test SESSION (e.g.
-    test_demo.py's restormer panel, which may well have already run) would
-    make this test see a cached model and never re-check checkpoints_dir at
-    all - cache_clear() first forces a genuine reload attempt under the
+    nafnet's loader and every Restormer variant's shared
+    _load_restormer_variant are functools.lru_cache'd (load once, reuse
+    forever within a process - see deep_restorers.py) so a real successful
+    load anywhere earlier in this test SESSION (e.g. test_demo.py's
+    restormer panel, which may well have already run) would make this test
+    see a cached model and never re-check checkpoints_dir at all -
+    cache_clear() first forces a genuine reload attempt under the
     monkeypatched (empty) directory."""
     import src.models.deep_restorers as dr
     monkeypatch.setattr(dr, "checkpoints_dir", lambda: tmp_path)
     dr._load_nafnet.cache_clear()
-    dr._load_restormer.cache_clear()
+    dr._load_restormer_variant.cache_clear()
     r = get_restorer(name)
     assert r.tier == "deep"
     with pytest.raises(RuntimeError) as exc:
@@ -76,7 +77,7 @@ def test_deep_restorer_without_weights_fails_loudly_with_url(name, tmp_path, mon
     # automatically at teardown, but the lru_cache is process-global state
     # monkeypatch doesn't know about).
     dr._load_nafnet.cache_clear()
-    dr._load_restormer.cache_clear()
+    dr._load_restormer_variant.cache_clear()
 
 
 def _weights_present(name: str) -> bool:
@@ -88,9 +89,12 @@ def _weights_present(name: str) -> bool:
     return True
 
 
-@pytest.mark.parametrize("name", ["nafnet", "restormer"])
-@pytest.mark.skipif(not any(_weights_present(n) for n in ("nafnet", "restormer")),
-                    reason="neither nafnet nor restormer weights are downloaded")
+_DEEP_NAMES = ["nafnet", "restormer", "restormer_motion_deblur", "restormer_defocus_deblur"]
+
+
+@pytest.mark.parametrize("name", _DEEP_NAMES)
+@pytest.mark.skipif(not any(_weights_present(n) for n in _DEEP_NAMES),
+                    reason="none of the in-process deep restorer weights are downloaded")
 def test_deep_restorer_with_real_weights_runs(name):
     """Once weights are present, these run real in-process CPU inference -
     no subprocess, no per-call reload (build_deep_restorer loads the model
@@ -98,8 +102,13 @@ def test_deep_restorer_with_real_weights_runs(name):
     cached module object, not rebuild it)."""
     if not _weights_present(name):
         pytest.skip(f"{name} weights not downloaded")
-    from src.models.deep_restorers import _load_nafnet, _load_restormer
-    loader = {"nafnet": _load_nafnet, "restormer": _load_restormer}[name]
+    from src.models.deep_restorers import (
+        _load_nafnet, _load_restormer, _load_restormer_motion_deblur,
+        _load_restormer_defocus_deblur,
+    )
+    loader = {"nafnet": _load_nafnet, "restormer": _load_restormer,
+             "restormer_motion_deblur": _load_restormer_motion_deblur,
+             "restormer_defocus_deblur": _load_restormer_defocus_deblur}[name]
 
     r = get_restorer(name)
     assert r.tier == "deep"
@@ -126,6 +135,55 @@ def test_weights_missing_message_names_both_files_for_diffbir():
     msg = _weights_missing_message("diffbir")
     assert REPO_SPECS["diffbir"]["weights_url"] in msg
     assert REPO_SPECS["diffbir"]["base_weights_url"] in msg
+
+
+def test_restormer_deblur_is_listed_in_available_restorers():
+    assert "restormer_deblur" in available_restorers(include_deep=True)
+    assert "restormer_deblur" not in available_restorers(include_deep=False)
+
+
+def test_restormer_deblur_fails_loudly_without_either_checkpoint(tmp_path, monkeypatch):
+    import src.models.deep_restorers as dr
+    monkeypatch.setattr(dr, "checkpoints_dir", lambda: tmp_path)
+    r = get_restorer("restormer_deblur")
+    assert r.tier == "deep"
+    with pytest.raises(RuntimeError) as exc:
+        r(_img())
+    msg = str(exc.value)
+    assert REPO_SPECS["restormer_motion_deblur"]["weights_url"] in msg
+
+
+@pytest.mark.parametrize("blur_kind,expect_branch", [
+    ("motion", "motion"), ("defocus", "defocus"), ("none", None),
+])
+def test_restormer_deblur_dispatches_by_estimated_blur_kind(blur_kind, expect_branch, monkeypatch):
+    """The actual point of this restorer: it must pick the checkpoint that
+    matches THIS image's estimated blur_kind, not a fixed one - and must
+    NOT invoke either deblurring model when blur_kind is 'none' (matching
+    PCIM's own fail-safe of skipping deconvolution entirely rather than
+    running it against a near-identity kernel). Mocks estimate() directly
+    rather than relying on a real image actually triggering each kind, and
+    mocks both restore functions so this needs no downloaded weights at
+    all - purely a dispatch-logic test, DBDE's own detection accuracy is
+    covered in test_dbde.py."""
+    import src.models.deep_restorers as dr
+    from src.dbde.estimator import DegradationEstimate
+
+    calls = []
+    monkeypatch.setattr(dr, "_restore_restormer_motion_deblur",
+                        lambda img: calls.append("motion") or img)
+    monkeypatch.setattr(dr, "_restore_restormer_defocus_deblur",
+                        lambda img: calls.append("defocus") or img)
+    fake_est = DegradationEstimate(blur_kind=blur_kind)
+    monkeypatch.setattr("src.dbde.estimator.estimate", lambda img, ref_logpsd=None: fake_est)
+
+    x = _img(size=16)
+    out = dr._restore_restormer_deblur(x)
+    assert out.shape == x.shape
+    if expect_branch is None:
+        assert calls == []  # 'none' falls back to identity, neither model runs
+    else:
+        assert calls == [expect_branch]
 
 
 def test_unknown_deep_restorer_name_raises_keyerror():
