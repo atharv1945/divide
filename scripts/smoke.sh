@@ -35,16 +35,17 @@ echo
 echo "== gradio demo (construction only, no server) =="
 python -c "from src.demo.app import build_demo; build_demo(); print('  demo builds OK')"
 echo
-echo "== deep restorer registry (fail-loud check, no weights present) =="
+echo "== deep restorer registry (fail-loud if weights absent, runs if present) =="
 python -c "
 from src.models.restorers import get_restorer, DEEP_SPECS
 import numpy as np
-img = np.zeros((16, 16, 3), np.float32)
+img = np.clip(np.random.default_rng(0).random((32, 32, 3)).astype(np.float32), 0, 1)
 for name in DEEP_SPECS:
     r = get_restorer(name)
     try:
-        r(img)
-        raise SystemExit(f'{name}: expected RuntimeError for missing weights, got none')
+        out = r(img)
+        assert out.shape == img.shape and np.isfinite(out).all(), name
+        print(f'  {name}: weights present, ran successfully')
     except RuntimeError as e:
         assert DEEP_SPECS[name]['weights_url'] in str(e), name
         print(f'  {name}: fails loudly with URL, as expected')
