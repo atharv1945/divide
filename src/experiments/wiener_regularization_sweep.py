@@ -69,6 +69,7 @@ def main() -> int:
             nsr=nsr,
             drr_rel_mean=float(sub.drr_rel.mean()),
             drr_rel_scratch=float(scratch.drr_rel.mean()) if not scratch.empty else float("nan"),
+            residual_corr_scratch=float(scratch.residual_corr.mean()) if not scratch.empty else float("nan"),
             dremr_mean=float(sub.dremr.mean()),
             psnr_normal=float(sub.psnr_normal.mean()),
         ))
@@ -77,7 +78,7 @@ def main() -> int:
     sweep.to_csv(sweep_path, index=False)
 
     print("\n" + "=" * 74)
-    print("SCRATCH RELATIVE DRR vs NSR (Wiener regularization constant)")
+    print("SCRATCH RELATIVE DRR AND RESIDUAL CORRELATION vs NSR")
     print("=" * 74)
     print(sweep.round(4).to_string(index=False))
 
@@ -86,13 +87,16 @@ def main() -> int:
     import matplotlib.pyplot as plt
 
     fig, ax1 = plt.subplots(figsize=(7.5, 5.2), dpi=150)
-    ax1.plot(sweep.nsr, sweep.drr_rel_scratch, "o-", color="tab:red", label="scratch relative DRR")
+    ax1.plot(sweep.nsr, sweep.drr_rel_scratch, "o-", color="tab:red", label="scratch relative DRR (magnitude)")
     ax1.plot(sweep.nsr, sweep.drr_rel_mean, "s--", color="tab:orange", alpha=0.6, label="mean relative DRR (all kinds)")
+    ax1.plot(sweep.nsr, sweep.residual_corr_scratch, "^-", color="tab:blue",
+             label="scratch residual correlation (shape)")
     ax1.set_xscale("log")
     ax1.axhline(1.0, ls=":", c="green", lw=1.0)
     ax1.axhline(0.5, ls=":", c="gray", lw=1.0)
+    ax1.axhline(0.0, ls=":", c="gray", lw=1.0)
     ax1.set_xlabel("nsr (Wiener regularization constant, log scale)")
-    ax1.set_ylabel("relative DRR")
+    ax1.set_ylabel("relative DRR  /  residual correlation")
     ax1.set_title("Defect erosion vs. Wiener regularization strength\n(defocus+motion, severities 2-4, real MVTec)")
     ax1.grid(alpha=0.25, which="both")
     ax1.legend(loc="upper left", fontsize=8)
