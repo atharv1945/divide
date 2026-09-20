@@ -9,7 +9,7 @@ import pytest
 from src.metrics.core import (
     auroc, average_precision, f1_max, psnr,
     defect_retention_ratio, anomaly_contrast_gain, local_contrast,
-    degradation_removal_ratio, hallucinated_defect_rate,
+    degradation_magnitude, degradation_removal_ratio, hallucinated_defect_rate,
     robustness_gap, gap_closed,
 )
 
@@ -176,6 +176,44 @@ def test_dremr_ignores_defect_region():
     restored = clean.copy()
     restored[mb] = 0.0                                 # huge error, but in-mask
     assert degradation_removal_ratio(restored, degraded, clean, m) == pytest.approx(1.0, abs=1e-6)
+
+
+def test_degradation_magnitude_matches_dremr_denominator():
+    """degradation_magnitude() must be exactly the quantity DRemR divides
+    by - same fixed restoration error should produce a DRemR delta of
+    error / degradation_magnitude, per the ratio's closed form."""
+    clean = _base()
+    degraded = clean + 0.1
+    mag = degradation_magnitude(degraded, clean)
+    assert mag == pytest.approx(0.1 * 64 * 64, rel=1e-5)  # _gray averages channels first
+
+    restored_ok = clean.copy()
+    restored_bad = clean + 0.02                        # small, fixed absolute error
+    dremr_ok = degradation_removal_ratio(restored_ok, degraded, clean)
+    dremr_bad = degradation_removal_ratio(restored_bad, degraded, clean)
+    # grayscale (channel-averaged) error, matching _gray's convention inside
+    # degradation_removal_ratio - NOT a raw per-channel RGB sum.
+    error = float(np.abs(restored_bad - restored_ok).mean(axis=2).sum())
+    assert (dremr_ok - dremr_bad) == pytest.approx(error / mag, rel=1e-4)
+
+
+def test_degradation_magnitude_smaller_amplifies_dremr_delta_for_same_error():
+    """The mechanism behind the ratio-instability hypothesis: identical
+    absolute restoration error produces a LARGER DRemR swing when
+    degradation_magnitude is smaller (mild degradation) than when it's
+    larger (severe degradation)."""
+    clean = _base()
+    mild = clean + 0.02      # small degradation -> small denominator
+    severe = clean + 0.5     # large degradation -> large denominator
+
+    restored_ok_mild, restored_bad_mild = clean.copy(), clean + 0.01
+    restored_ok_severe, restored_bad_severe = clean.copy(), clean + 0.01
+
+    delta_mild = (degradation_removal_ratio(restored_ok_mild, mild, clean)
+                 - degradation_removal_ratio(restored_bad_mild, mild, clean))
+    delta_severe = (degradation_removal_ratio(restored_ok_severe, severe, clean)
+                    - degradation_removal_ratio(restored_bad_severe, severe, clean))
+    assert abs(delta_mild) > abs(delta_severe)
 
 
 # ---------------------------------------------------------------- HDR

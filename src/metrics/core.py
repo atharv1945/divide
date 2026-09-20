@@ -163,6 +163,26 @@ def hallucinated_defect_rate(scores_restored_clean: np.ndarray,
 # PROPOSED METRIC 4 - Degradation Removal Ratio
 # --------------------------------------------------------------------------
 
+def degradation_magnitude(degraded: np.ndarray, clean: np.ndarray,
+                          mask: np.ndarray | None = None) -> float:
+    """||y - x||_1 on NORMAL regions - DRemR's denominator, exposed on its
+    own because it sets DRemR's sensitivity to restoration error:
+    d(DRemR)/d(restoration error) = -1/degradation_magnitude, so a FIXED
+    absolute restoration-error change produces a LARGER DRemR swing on
+    mildly-degraded examples (small magnitude here) than on severely
+    degraded ones. That's an exact consequence of the ratio in
+    degradation_removal_ratio's formula, not an empirical claim about any
+    particular model or run."""
+    d, c = _gray(degraded), _gray(clean)
+    if mask is not None:
+        norm = ~_as_bool(mask)
+    else:
+        norm = np.ones(c.shape, bool)
+    if norm.sum() == 0:
+        return float("nan")
+    return float(np.abs(d[norm] - c[norm]).sum())
+
+
 def degradation_removal_ratio(restored: np.ndarray, degraded: np.ndarray,
                               clean: np.ndarray,
                               mask: np.ndarray | None = None) -> float:
@@ -170,6 +190,32 @@ def degradation_removal_ratio(restored: np.ndarray, degraded: np.ndarray,
 
     1.0 = degradation perfectly removed, 0.0 = nothing done,
     negative = restoration moved further from clean than the degraded input.
+
+    A ratio, not an absolute error: its denominator is degradation_magnitude(),
+    which can be small (mild degradation) or large (severe degradation, esp.
+    illumination) by construction - see that function's docstring for the
+    exact sensitivity this implies. Measured on a real PCIM checkpoint
+    (src/experiments/eval_pcim_holdout.py, 150 held-out MVTec examples) this
+    is NOT simply "DRemR is noisier than PSNR, trust PSNR instead" - the
+    distortion is directional and asymmetric:
+      - small degradation_magnitude (severity 1, easy families): DRemR was
+        CONSISTENTLY biased negative (mean -0.21 across the mildest third)
+        despite excellent PSNR (33-40dB) on the same examples - a small,
+        genuinely-present restoration error gets amplified by the small
+        denominator into a DRemR that reads as "made it worse."
+      - large degradation_magnitude (severity 3-5 illumination especially):
+        DRemR sat near zero (mean +0.11) despite catastrophic PSNR (down to
+        6-9dB) on the same examples - the same mechanism in reverse: a huge
+        denominator deflates a large absolute error into a DRemR that reads
+        as "did nothing," masking real failure.
+      - the highest DRemR variance and the single worst outlier in that
+        run (-4.03) came from the MIDDLE third of the degradation_magnitude
+        range, not the smallest-denominator tail - so this ratio mechanism
+        does not fully explain observed DRemR volatility; some of it is
+        genuine, family/severity-dependent model behaviour.
+    Net: always report PSNR alongside DRemR, and treat a DRemR near zero on
+    severely-illumination-degraded examples as uninformative rather than
+    reassuring - check PSNR there specifically.
     """
     r, d, c = _gray(restored), _gray(degraded), _gray(clean)
     if mask is not None:
@@ -179,8 +225,8 @@ def degradation_removal_ratio(restored: np.ndarray, degraded: np.ndarray,
     if norm.sum() == 0:
         return float("nan")
     num = float(np.abs(r[norm] - c[norm]).sum())
-    den = float(np.abs(d[norm] - c[norm]).sum())
-    if den <= EPS:
+    den = degradation_magnitude(degraded, clean, mask)
+    if not np.isfinite(den) or den <= EPS:
         return float("nan")
     return float(1.0 - num / den)
 
