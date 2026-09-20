@@ -83,13 +83,18 @@ def build_holdout_eval_set(cfg: dict, pools, bank, ref_cache, seed: int, n: int)
 @torch.no_grad()
 def per_example_eval(model: PCIM, eval_set, device: str) -> list[dict]:
     """One row per example, carrying everything both diagnostics need:
-    den (degradation_magnitude, DRemR's denominator), dremr, psnr, relative
-    DRR, plus category/kind/family/severity for breakdowns."""
+    den (degradation_magnitude, DRemR's denominator), dremr/psnr for x_full
+    AND the degraded-input and x_cons baselines (so a bad x_full cell can be
+    told apart from "the input was already this bad" vs "the model made it
+    worse"), relative DRR, blur-detection diagnostics (blur_kind, the
+    estimated kernel size, whether the Wiener step ran at all), plus
+    category/kind/family/severity for breakdowns."""
     rows = []
     for ex in eval_set:
-        x_full_a, _, x_full_0, _, _, _, _, _ = _restore_both(model, ex, device)
+        x_full_a, x_cons_a, x_full_0, _, _, _, _, _ = _restore_both(model, ex, device)
         r_a = x_full_a.squeeze(0).clamp(0, 1).cpu().numpy().transpose(1, 2, 0)
         r_0 = x_full_0.squeeze(0).clamp(0, 1).cpu().numpy().transpose(1, 2, 0)
+        rc_a = x_cons_a.squeeze(0).clamp(0, 1).cpu().numpy().transpose(1, 2, 0)
         normal_mask = ~ex.mask.astype(bool)
 
         drr_id = defect_retention_ratio(ex.y_a, ex.y_0, ex.x_a, ex.x0, ex.mask)
@@ -99,24 +104,100 @@ def per_example_eval(model: PCIM, eval_set, device: str) -> list[dict]:
         den = degradation_magnitude(ex.y_a, ex.x_a, ex.mask)
         dremr = degradation_removal_ratio(r_a, ex.y_a, ex.x_a, ex.mask)
         p = psnr(r_a, ex.x_a, mask=normal_mask)
+        dremr_cons = degradation_removal_ratio(rc_a, ex.y_a, ex.x_a, ex.mask)
+        psnr_cons = psnr(rc_a, ex.x_a, mask=normal_mask)
+        # degraded-vs-itself is 0.0 by construction (see
+        # degradation_removal_ratio's docstring) - kept anyway so every row
+        # carries a like-for-like "did nothing" baseline next to psnr_deg.
+        dremr_deg = degradation_removal_ratio(ex.y_a, ex.y_a, ex.x_a, ex.mask)
+        psnr_deg = psnr(ex.y_a, ex.x_a, mask=normal_mask)
+
+        est = ex.est
+        wiener_ran = est.blur_kind != "none"
+        kernel_size = (est.blur_radius if est.blur_kind == "defocus"
+                      else est.blur_length if est.blur_kind == "motion" else 0.0)
 
         rows.append(dict(category=ex.category, kind=ex.kind, family=ex.family,
-                         severity=ex.severity, den=den, dremr=dremr, psnr=p,
-                         relative_drr=rel))
+                         severity=ex.severity, den=den,
+                         dremr=dremr, psnr=p,
+                         dremr_cons=dremr_cons, psnr_cons=psnr_cons,
+                         dremr_deg=dremr_deg, psnr_deg=psnr_deg,
+                         relative_drr=rel,
+                         blur_kind=est.blur_kind, kernel_size=kernel_size,
+                         wiener_ran=wiener_ran))
     return rows
+
+
+def breakdown_by_family_severity(rows: list[dict]) -> dict[tuple[str, int], dict]:
+    """Per (family, severity) cell: n, and mean+std of degraded/x_cons/x_full
+    DRemR and PSNR - lets a catastrophic cell be told apart as "the input
+    was already destroyed" (degraded and x_full both bad) vs "the model
+    destroyed it" (degraded fine, x_full bad)."""
+    groups: dict[tuple[str, int], list[dict]] = {}
+    for r in rows:
+        groups.setdefault((r["family"], r["severity"]), []).append(r)
+
+    def _stat(grp: list[dict], field: str) -> tuple[float, float]:
+        vals = np.array([r[field] for r in grp if np.isfinite(r[field])])
+        if len(vals) == 0:
+            return float("nan"), float("nan")
+        return float(vals.mean()), float(vals.std())
+
+    out = {}
+    for key, grp in groups.items():
+        out[key] = dict(
+            n=len(grp),
+            deg_psnr=_stat(grp, "psnr_deg"), deg_dremr=_stat(grp, "dremr_deg"),
+            cons_psnr=_stat(grp, "psnr_cons"), cons_dremr=_stat(grp, "dremr_cons"),
+            full_psnr=_stat(grp, "psnr"), full_dremr=_stat(grp, "dremr"),
+        )
+    return out
+
+
+def physics_guard_check(rows: list[dict], floor: float = -0.5) -> dict:
+    """assert_physics_sane (pcim.py) checks the EVAL-SET MEAN of x_cons's
+    DRemR against `floor`. This checks each individual example's x_cons
+    DRemR against the same floor, so the two can be compared: a mean well
+    above floor can still hide individual examples far below it, if the
+    eval set mixes easy and catastrophic cases (exactly what mixing all
+    severities in one set does)."""
+    finite = [r for r in rows if np.isfinite(r["dremr_cons"])]
+    cons_vals = np.array([r["dremr_cons"] for r in finite])
+    violations = [r for r in finite if r["dremr_cons"] < floor]
+    return dict(
+        n=len(finite),
+        mean=float(cons_vals.mean()) if len(cons_vals) else float("nan"),
+        mean_would_fire=bool(len(cons_vals) and cons_vals.mean() < floor),
+        n_individual_violations=len(violations),
+        individual_violations=[
+            dict(category=r["category"], family=r["family"], severity=r["severity"],
+                dremr_cons=r["dremr_cons"], psnr_cons=r["psnr_cons"],
+                blur_kind=r["blur_kind"], kernel_size=r["kernel_size"],
+                wiener_ran=r["wiener_ran"])
+            for r in violations
+        ],
+    )
 
 
 def summarize(rows: list[dict]) -> dict:
     """Task (a): trustworthy final numbers - mean +/- std, not a single
-    noisy point."""
-    dremrs = np.array([r["dremr"] for r in rows if np.isfinite(r["dremr"])])
-    psnrs = np.array([r["psnr"] for r in rows if np.isfinite(r["psnr"])])
+    noisy point. Includes the degraded-input and x_cons baselines alongside
+    x_full so a bad aggregate can be told apart as "the inputs were already
+    this bad" vs "the model made it worse"."""
+    def _agg(field):
+        vals = np.array([r[field] for r in rows if np.isfinite(r[field])])
+        return (float(vals.mean()), float(vals.std())) if len(vals) else (float("nan"), float("nan"))
+
+    dremr_mean, dremr_std = _agg("dremr")
+    psnr_mean, psnr_std = _agg("psnr")
     out = dict(
         n=len(rows),
-        dremr_mean=float(dremrs.mean()) if len(dremrs) else float("nan"),
-        dremr_std=float(dremrs.std()) if len(dremrs) else float("nan"),
-        psnr_mean=float(psnrs.mean()) if len(psnrs) else float("nan"),
-        psnr_std=float(psnrs.std()) if len(psnrs) else float("nan"),
+        dremr_mean=dremr_mean, dremr_std=dremr_std,
+        psnr_mean=psnr_mean, psnr_std=psnr_std,
+        deg_dremr_mean=_agg("dremr_deg")[0], deg_dremr_std=_agg("dremr_deg")[1],
+        deg_psnr_mean=_agg("psnr_deg")[0], deg_psnr_std=_agg("psnr_deg")[1],
+        cons_dremr_mean=_agg("dremr_cons")[0], cons_dremr_std=_agg("dremr_cons")[1],
+        cons_psnr_mean=_agg("psnr_cons")[0], cons_psnr_std=_agg("psnr_cons")[1],
     )
     for kind in ANOMALY_KINDS:
         vals = [r["relative_drr"] for r in rows
@@ -199,10 +280,49 @@ def main() -> int:
 
     summ = summarize(rows)
     print(f"(a) held-out eval: n={summ['n']} (seed={args.seed}, disjoint from training's eval.seed)")
-    print(f"    dremr : {summ['dremr_mean']:.4f} +/- {summ['dremr_std']:.4f}")
-    print(f"    psnr  : {summ['psnr_mean']:.3f} +/- {summ['psnr_std']:.3f} dB")
+    print(f"    {'':10s} {'DRemR':>16s} {'PSNR (dB)':>16s}")
+    print(f"    {'degraded':10s} {summ['deg_dremr_mean']:>7.4f} +/- {summ['deg_dremr_std']:<6.4f} "
+         f"{summ['deg_psnr_mean']:>7.3f} +/- {summ['deg_psnr_std']:<6.3f}")
+    print(f"    {'x_cons':10s} {summ['cons_dremr_mean']:>7.4f} +/- {summ['cons_dremr_std']:<6.4f} "
+         f"{summ['cons_psnr_mean']:>7.3f} +/- {summ['cons_psnr_std']:<6.3f}")
+    print(f"    {'x_full':10s} {summ['dremr_mean']:>7.4f} +/- {summ['dremr_std']:<6.4f} "
+         f"{summ['psnr_mean']:>7.3f} +/- {summ['psnr_std']:<6.3f}")
     for kind in ANOMALY_KINDS:
         print(f"    relative_drr[{kind}]: {summ[f'relative_drr_{kind}']:.4f}")
+    print()
+
+    print("(a) breakdown by family x severity (n, degraded/x_cons/x_full PSNR dB, x_full DRemR):")
+    breakdown = breakdown_by_family_severity(rows)
+    for (family, severity), cell in sorted(breakdown.items(), key=lambda kv: (kv[0][0], kv[0][1])):
+        print(f"    {family:12s} sev={severity}  n={cell['n']:3d}  "
+             f"deg_psnr={cell['deg_psnr'][0]:6.2f}  cons_psnr={cell['cons_psnr'][0]:6.2f}  "
+             f"full_psnr={cell['full_psnr'][0]:6.2f}  full_dremr={cell['full_dremr'][0]:+.3f}")
+    print()
+
+    guard150 = physics_guard_check(rows, floor=-0.5)
+    print(f"(physics guard) per-example x_cons DRemR < -0.5, on the 150-example held-out set:")
+    print(f"    mean x_cons DRemR = {guard150['mean']:.4f} "
+         f"(aggregate-mean guard would fire: {guard150['mean_would_fire']})")
+    print(f"    individual violations: {guard150['n_individual_violations']} / {guard150['n']}")
+    for v in guard150["individual_violations"]:
+        print(f"      {v['category']:8s} {v['family']:12s} sev={v['severity']}  "
+             f"x_cons_dremr={v['dremr_cons']:+.3f}  x_cons_psnr={v['psnr_cons']:6.2f}  "
+             f"blur_kind={v['blur_kind']:8s} kernel_size={v['kernel_size']:.2f}  "
+             f"wiener_ran={v['wiener_ran']}")
+    print()
+
+    orig_eval_set = build_eval_set(cfg, pools, bank, ref_cache)
+    orig_rows = per_example_eval(model, orig_eval_set, args.device)
+    guard24 = physics_guard_check(orig_rows, floor=-0.5)
+    print(f"(physics guard) same check on the ACTUAL 24-example training eval set:")
+    print(f"    mean x_cons DRemR = {guard24['mean']:.4f} "
+         f"(aggregate-mean guard would fire: {guard24['mean_would_fire']})")
+    print(f"    individual violations: {guard24['n_individual_violations']} / {guard24['n']}")
+    for v in guard24["individual_violations"]:
+        print(f"      {v['category']:8s} {v['family']:12s} sev={v['severity']}  "
+             f"x_cons_dremr={v['dremr_cons']:+.3f}  x_cons_psnr={v['psnr_cons']:6.2f}  "
+             f"blur_kind={v['blur_kind']:8s} kernel_size={v['kernel_size']:.2f}  "
+             f"wiener_ran={v['wiener_ran']}")
     print()
 
     check = ratio_instability_check(rows)

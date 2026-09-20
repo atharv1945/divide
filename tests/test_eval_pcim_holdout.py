@@ -34,11 +34,28 @@ def test_holdout_eval_and_ratio_check_run_end_to_end(tmp_path, monkeypatch):
     assert len(eval_set) == 6
     rows = eh.per_example_eval(model, eval_set, "cpu")
     assert len(rows) == 6
-    for key in ("category", "kind", "family", "severity", "den", "dremr", "psnr", "relative_drr"):
+    for key in ("category", "kind", "family", "severity", "den", "dremr", "psnr",
+               "dremr_cons", "psnr_cons", "dremr_deg", "psnr_deg", "relative_drr",
+               "blur_kind", "kernel_size", "wiener_ran"):
         assert key in rows[0]
+    # degraded-vs-itself is 0.0 by construction (see
+    # degradation_removal_ratio's docstring)
+    for r in rows:
+        assert r["dremr_deg"] == pytest.approx(0.0, abs=1e-6)
+        assert r["wiener_ran"] == (r["blur_kind"] != "none")
 
     summ = eh.summarize(rows)
     assert summ["n"] == 6
+    for key in ("deg_dremr_mean", "cons_dremr_mean", "deg_psnr_mean", "cons_psnr_mean"):
+        assert key in summ
+
+    breakdown = eh.breakdown_by_family_severity(rows)
+    assert len(breakdown) > 0
+    for cell in breakdown.values():
+        assert "deg_psnr" in cell and "cons_dremr" in cell and "full_dremr" in cell
+
+    guard = eh.physics_guard_check(rows, floor=-0.5)
+    assert "mean_would_fire" in guard and "individual_violations" in guard
 
     check = eh.ratio_instability_check(rows)
     assert "corr_den_dremr" in check and "corr_den_psnr" in check
