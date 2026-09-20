@@ -28,14 +28,37 @@ def test_clean_and_degraded_panels_always_score_successfully():
     assert panels["degraded"].error is None
 
 
-def test_restormer_and_divide_panels_fail_loud_not_crash_without_weights():
-    """Neither restorer has weights in this environment - the demo must show
-    the fail-loud message in that panel, not raise out of build_panels()."""
+def test_divide_panel_fails_loud_not_crash_without_weights():
+    """'divide' has no trained checkpoint in this environment (or any CI
+    environment - it's this project's own model, nothing to download) - the
+    demo must show the fail-loud message in that panel, not raise out of
+    build_panels()."""
     from src.demo.app import build_panels
 
     panels = build_panels("illumination", 2)
-    for key in ("restormer", "divide"):
-        p = panels[key]
+    p = panels["divide"]
+    assert p.error is not None
+    assert p.score is None
+    assert np.array_equal(p.image, np.zeros_like(p.image))
+
+
+def test_restormer_panel_runs_or_fails_loud():
+    """restormer's weights may or may not be present depending on the
+    machine (this one has them downloaded - see test_restorers.py); either
+    way build_panels() must not raise, and whichever branch is live must be
+    internally consistent (a score without an error, or an error without a
+    score, never both/neither)."""
+    from src.demo.app import build_panels
+    from src.models.deep_restorers import REPO_SPECS
+    from src.utils.paths import checkpoints_dir
+
+    panels = build_panels("illumination", 2)
+    p = panels["restormer"]
+    weights_present = (checkpoints_dir() / REPO_SPECS["restormer"]["weights"]).exists()
+    if weights_present:
+        assert p.error is None
+        assert p.score is not None
+    else:
         assert p.error is not None
         assert p.score is None
         assert np.array_equal(p.image, np.zeros_like(p.image))

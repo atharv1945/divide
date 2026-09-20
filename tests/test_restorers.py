@@ -5,6 +5,7 @@ from src.models.restorers import (
     CLASSICAL, DEEP_SPECS, available_restorers, get_restorer,
 )
 from src.models.deep_restorers import REPO_SPECS, _weights_missing_message
+from src.utils.paths import checkpoints_dir
 
 
 def _img(size=48):
@@ -45,10 +46,24 @@ def test_available_restorers_lists_classical_and_deep():
 # ---------------------------------------------------------------- deep (fail-loud path)
 
 @pytest.mark.parametrize("name", sorted(REPO_SPECS))
-def test_deep_restorer_without_weights_fails_loudly_with_url(name):
-    """No weights are present in this environment - this IS the code path
-    that must run on the GPU machine's first invocation too, before weights
-    are downloaded. It must never silently no-op."""
+def test_deep_restorer_without_weights_fails_loudly_with_url(name, tmp_path, monkeypatch):
+    """This IS the code path that must run on a fresh machine's first
+    invocation, before weights are downloaded - it must never silently
+    no-op. Monkeypatched to an empty tmp_path rather than relying on this
+    dev machine actually lacking weights (nafnet/restormer's ARE present
+    here now - see test_deep_restorer_with_real_weights_runs below).
+
+    nafnet/restormer's loaders are functools.lru_cache'd with no arguments
+    (load once, reuse forever within a process - see deep_restorers.py) so
+    a real successful load anywhere earlier in this test SESSION (e.g.
+    test_demo.py's restormer panel, which may well have already run) would
+    make this test see a cached model and never re-check checkpoints_dir at
+    all - cache_clear() first forces a genuine reload attempt under the
+    monkeypatched (empty) directory."""
+    import src.models.deep_restorers as dr
+    monkeypatch.setattr(dr, "checkpoints_dir", lambda: tmp_path)
+    dr._load_nafnet.cache_clear()
+    dr._load_restormer.cache_clear()
     r = get_restorer(name)
     assert r.tier == "deep"
     with pytest.raises(RuntimeError) as exc:
@@ -56,6 +71,48 @@ def test_deep_restorer_without_weights_fails_loudly_with_url(name):
     msg = str(exc.value)
     assert REPO_SPECS[name]["weights_url"] in msg
     assert REPO_SPECS[name]["weights"] in msg
+    # leave the cache clean so a later test doesn't see this tmp_path stuck
+    # in place of the real checkpoints_dir (monkeypatch itself is undone
+    # automatically at teardown, but the lru_cache is process-global state
+    # monkeypatch doesn't know about).
+    dr._load_nafnet.cache_clear()
+    dr._load_restormer.cache_clear()
+
+
+def _weights_present(name: str) -> bool:
+    spec = REPO_SPECS[name]
+    if not (checkpoints_dir() / spec["weights"]).exists():
+        return False
+    if "base_weights" in spec and not (checkpoints_dir() / spec["base_weights"]).exists():
+        return False
+    return True
+
+
+@pytest.mark.parametrize("name", ["nafnet", "restormer"])
+@pytest.mark.skipif(not any(_weights_present(n) for n in ("nafnet", "restormer")),
+                    reason="neither nafnet nor restormer weights are downloaded")
+def test_deep_restorer_with_real_weights_runs(name):
+    """Once weights are present, these run real in-process CPU inference -
+    no subprocess, no per-call reload (build_deep_restorer loads the model
+    once; calling the returned Restorer twice must reuse the exact same
+    cached module object, not rebuild it)."""
+    if not _weights_present(name):
+        pytest.skip(f"{name} weights not downloaded")
+    from src.models.deep_restorers import _load_nafnet, _load_restormer
+    loader = {"nafnet": _load_nafnet, "restormer": _load_restormer}[name]
+
+    r = get_restorer(name)
+    assert r.tier == "deep"
+    x = _img(size=32)
+    out = r(x)
+    assert out.shape == x.shape
+    assert out.dtype == np.float32
+    assert np.isfinite(out).all()
+    assert 0.0 <= out.min() and out.max() <= 1.0
+
+    m1 = loader()
+    m2 = loader()
+    assert m1 is m2  # lru_cache - loaded once, reused
 
 
 def test_deep_specs_urls_are_well_formed():
