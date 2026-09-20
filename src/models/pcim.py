@@ -46,6 +46,8 @@ PCIM's.
 """
 from __future__ import annotations
 
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -300,6 +302,18 @@ class PCIM(nn.Module):
         return x_full, x_cons
 
 
+_PHYSICS_FAIL_EXPLANATION = (
+    "x_cons has no learned component - illumination divide, VST, "
+    "closed-form Wiener, inverse VST only. A DRemR this negative "
+    "means the PURE PHYSICS PATH is destroying the image, not the "
+    "learned prox or L_pres. Do not retune loss weights for this - "
+    "see src/experiments/bisect_pcim.py to isolate which physics "
+    "stage is responsible (illumination / VST / Wiener) before "
+    "changing anything.\n"
+    f"{'=' * 70}"
+)
+
+
 def assert_physics_sane(x_cons_dremr: float, floor: float = -0.5) -> None:
     """x_cons is the alpha=0 path: illumination divide, VST, closed-form
     Wiener, inverse VST - nothing learned. It has no mechanism to make
@@ -310,18 +324,114 @@ def assert_physics_sane(x_cons_dremr: float, floor: float = -0.5) -> None:
     over the following hours - which is exactly what happened before this
     check existed. Called from train_pcim.py's evaluate() every eval_every
     steps.
+
+    This is TIER 1 of assert_physics_sane_stratified below - kept as a
+    standalone single-float function too since most callers (a single
+    scalar eval-set mean) don't have or need the per-example breakdown the
+    stratified version requires.
     """
     if x_cons_dremr < floor:
         raise RuntimeError(
             f"\n{'=' * 70}\n"
-            f"PHYSICS SANITY CHECK FAILED: x_cons DRemR = {x_cons_dremr:.3f}, "
-            f"below the floor of {floor}.\n"
-            f"x_cons has no learned component - illumination divide, VST, "
-            f"closed-form Wiener, inverse VST only. A DRemR this negative "
-            f"means the PURE PHYSICS PATH is destroying the image, not the "
-            f"learned prox or L_pres. Do not retune loss weights for this - "
-            f"see src/experiments/bisect_pcim.py to isolate which physics "
-            f"stage is responsible (illumination / VST / Wiener) before "
-            f"changing anything.\n"
-            f"{'=' * 70}"
+            f"PHYSICS SANITY CHECK FAILED (aggregate mean): x_cons DRemR = "
+            f"{x_cons_dremr:.3f}, below the floor of {floor}.\n"
+            f"{_PHYSICS_FAIL_EXPLANATION}"
+        )
+
+
+def assert_physics_sane_stratified(
+    records: list[tuple[str, int, float]],
+    aggregate_floor: float = -0.5,
+    cell_floor: float = -0.5,
+    cell_violation_fraction: float = 0.34,
+    cell_min_n: int = 3,
+    singleton_floor: float = -2.0,
+) -> None:
+    """Three-tier physics-sanity guard over x_cons DRemR - replaces a
+    single aggregate-mean check that provably has a blind spot: an eval set
+    mixing easy and hard (family, severity) combinations can sit
+    comfortably above `aggregate_floor` on average while individual
+    examples, or one whole cell, sit far below it. Measured directly (see
+    src/experiments/eval_pcim_holdout.py's physics_guard_check): 24-example
+    training eval mean -0.021, 150-example held-out mean -0.065, both
+    nowhere near -0.5, while 6/150 individual examples were below -0.5
+    (worst -4.19), 3 of them from a single (carpet, defocus, severity-1)
+    cell that should have been among the EASIEST in the set.
+
+    Tier 1 - AGGREGATE MEAN (`aggregate_floor`, same check as
+    assert_physics_sane): catches total, uniform catastrophe.
+
+    Tier 2 - PER-(family, severity) CELL, `cell_floor` AND
+    `cell_violation_fraction` (both required, not either): catches a
+    systematic failure concentrated in one combination that the aggregate
+    dilutes away, while staying stable against single-example ratio noise
+    (metrics.core.degradation_removal_ratio's docstring documents why a
+    lone example's DRemR can swing hard on its own) because it still
+    averages several examples per cell and additionally requires a real
+    fraction of them to individually violate, not just one bad outlier
+    dragging a small cell's mean down. Cells smaller than `cell_min_n` are
+    skipped here (left to tier 3 instead) - found while testing: without a
+    minimum, a cell of size 1 makes "mean" and "fraction violating"
+    degenerate into the exact same tight per-example floor this tier was
+    designed to avoid (one bad example is both 100% of the cell AND its
+    whole mean).
+
+    Tier 3 - PER-EXAMPLE, `singleton_floor` (deliberately far looser than
+    -0.5, NOT -0.5 itself): a tripwire for one genuine catastrophic
+    example that a cell average could still dilute if the rest of the cell
+    is well-behaved. -2.0 is well past anything the ratio-instability
+    mechanism alone produced even at the smallest denominators measured
+    (the mildest third's worst single case was -0.60) - a per-example
+    floor this loose should only fire on a real failure, not metric noise,
+    which is exactly why a TIGHT per-example floor (e.g. at -0.5, the same
+    value as the aggregate/cell floors) was rejected: it would false-
+    trigger on exactly the noise this project spent effort characterising.
+
+    `records` is a flat list of (family, severity, x_cons_dremr) - x_cons
+    only, same reasoning as assert_physics_sane: it has no learned
+    component, so a violation is always a physics-chain bug, never a
+    training-driven excuse.
+    """
+    finite = [(f, s, d) for f, s, d in records if math.isfinite(d)]
+    if not finite:
+        return
+
+    mean_all = sum(d for _, _, d in finite) / len(finite)
+    if mean_all < aggregate_floor:
+        raise RuntimeError(
+            f"\n{'=' * 70}\n"
+            f"PHYSICS SANITY CHECK FAILED (tier 1, aggregate mean over "
+            f"{len(finite)} examples): x_cons DRemR mean = {mean_all:.3f}, "
+            f"below the floor of {aggregate_floor}.\n"
+            f"{_PHYSICS_FAIL_EXPLANATION}"
+        )
+
+    cells: dict[tuple[str, int], list[float]] = {}
+    for f, s, d in finite:
+        cells.setdefault((f, s), []).append(d)
+    for (family, severity), vals in sorted(cells.items()):
+        if len(vals) < cell_min_n:
+            continue
+        cell_mean = sum(vals) / len(vals)
+        frac_violating = sum(1 for v in vals if v < cell_floor) / len(vals)
+        if cell_mean < cell_floor and frac_violating >= cell_violation_fraction:
+            raise RuntimeError(
+                f"\n{'=' * 70}\n"
+                f"PHYSICS SANITY CHECK FAILED (tier 2, cell): "
+                f"family={family!r} severity={severity}, mean x_cons DRemR = "
+                f"{cell_mean:.3f} (< {cell_floor}), {frac_violating:.0%} of "
+                f"{len(vals)} examples in this cell individually violating "
+                f"(>= {cell_violation_fraction:.0%} required).\n"
+                f"{_PHYSICS_FAIL_EXPLANATION}"
+            )
+
+    worst_family, worst_severity, worst_d = min(finite, key=lambda r: r[2])
+    if worst_d < singleton_floor:
+        raise RuntimeError(
+            f"\n{'=' * 70}\n"
+            f"PHYSICS SANITY CHECK FAILED (tier 3, singleton): "
+            f"family={worst_family!r} severity={worst_severity}, "
+            f"x_cons DRemR = {worst_d:.3f}, below the singleton floor of "
+            f"{singleton_floor}.\n"
+            f"{_PHYSICS_FAIL_EXPLANATION}"
         )

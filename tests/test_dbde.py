@@ -362,3 +362,39 @@ def test_reference_blur_detection_true_positive_rate_at_severity_2_plus(family):
                 tp += 1
         rate = tp / n
         assert rate > 0.8, f"{family} severity {severity}: true-positive rate {rate:.1%} too low"
+
+
+@requires_real_data
+def test_carpet_defocus_severity_1_no_longer_misclassified_as_motion():
+    """Regression for the bug found via eval_pcim_holdout.py's physics-guard
+    check on the trained PCIM run: 3 of 8 real carpet/defocus/severity-1
+    examples were classified blur_kind='motion' (not 'none', not 'defocus'),
+    and PCIM deconvolved with the wrong-shaped kernel - x_cons_dremr as low
+    as -2.22 on cells that should have been the EASIEST in the eval set
+    (defocus severity 1). Root cause: _detect_blur_reference's old "lowest
+    raw MSE wins" contest compared motion's fit against a mse_none
+    placeholder standing in for defocus whenever defocus's own best radius
+    fell below min_radius (as severity-1's true ~1.0px radius does) - never
+    against defocus's actual (much better) fit. Severity 1 is still allowed
+    to come back 'none' (min_radius intentionally costs severity-1
+    sensitivity - see the true-positive-rate test above); what must never
+    happen again is 'motion'."""
+    from src.dbde.estimator import estimate, reference_psd
+    from src.degrade.simulator import sample_params, apply_degradation
+
+    imgs = load_train_normals("carpet", size=128, limit=20, smoke=False)
+    ref_imgs, test_imgs = imgs[:6], imgs[6:]
+    ref_logpsd = reference_psd(ref_imgs)
+    rng = np.random.default_rng(1)
+
+    motion_calls = []
+    for img in test_imgs:
+        p = sample_params("defocus", 1, rng)
+        y = apply_degradation(img, p, np.random.default_rng(0))
+        est = estimate(y, ref_logpsd=ref_logpsd)
+        if est.blur_kind == "motion":
+            motion_calls.append(est.blur_length)
+
+    assert motion_calls == [], (
+        f"carpet/defocus/severity-1 still misclassified as motion in "
+        f"{len(motion_calls)}/{len(test_imgs)} cases (lengths {motion_calls})")

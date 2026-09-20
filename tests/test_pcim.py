@@ -7,6 +7,7 @@ from src.models.pcim import (
     PCIM, ProxCNN, generalized_anscombe, inverse_generalized_anscombe,
     illumination_divide, illumination_restore, wiener_data_step,
     _kernel_to_otf, identity_otf,
+    assert_physics_sane, assert_physics_sane_stratified,
 )
 
 
@@ -252,3 +253,99 @@ def test_kernel_to_otf_shape():
     otf = _kernel_to_otf(k, 16, 16)
     assert otf.shape == (2, 1, 16, 16)
     assert torch.is_complex(otf)
+
+
+# --------------------------------------------------------------------------
+# physics-sanity guard - three tiers, each catching a failure shape the
+# others miss (see eval_pcim_holdout.py's physics_guard_check for the real
+# data that motivated tiers 2/3: a mean well above -0.5 hid 6/150
+# individual examples below it, 3 from one cell)
+# --------------------------------------------------------------------------
+
+def test_assert_physics_sane_fires_below_floor():
+    with pytest.raises(RuntimeError, match="PHYSICS SANITY CHECK FAILED"):
+        assert_physics_sane(-0.6, floor=-0.5)
+
+
+def test_assert_physics_sane_silent_above_floor():
+    assert_physics_sane(-0.1, floor=-0.5) is None  # must not raise
+
+
+def test_stratified_guard_silent_on_well_behaved_data():
+    records = [("defocus", 2, -0.05), ("motion", 3, 0.1), ("noise", 4, -0.2)]
+    assert_physics_sane_stratified(records) is None  # must not raise
+
+
+def test_stratified_guard_tier1_aggregate_mean():
+    """Uniform, total catastrophe - every example bad - must still fire,
+    same as the original single-float assert_physics_sane."""
+    records = [("defocus", s, -0.7) for s in (2, 3, 4)] * 5
+    with pytest.raises(RuntimeError, match="tier 1, aggregate mean"):
+        assert_physics_sane_stratified(records)
+
+
+def test_stratified_guard_tier2_catches_cell_the_aggregate_mean_hides():
+    """The actual bug this was built for: one bad (family, severity) cell
+    diluted by many good examples elsewhere, so the aggregate mean alone
+    (tier 1) would NOT catch it - mirrors the real carpet/defocus/
+    severity-1 case (3/8 catastrophic, mean over the full 150-example set
+    still nowhere near -0.5)."""
+    bad_cell = [("defocus", 1, -2.1), ("defocus", 1, -2.2), ("defocus", 1, -2.2),
+               ("defocus", 1, 0.0), ("defocus", 1, 0.0), ("defocus", 1, 0.0),
+               ("defocus", 1, 0.0), ("defocus", 1, 0.0)]
+    good_elsewhere = [("motion", s, 0.05) for s in (2, 3, 4)] * 40
+    records = bad_cell + good_elsewhere
+    aggregate_mean = sum(d for _, _, d in records) / len(records)
+    assert aggregate_mean > -0.5, "test fixture must NOT trip tier 1 - that's the point"
+    with pytest.raises(RuntimeError, match="tier 2, cell"):
+        assert_physics_sane_stratified(records)
+
+
+def test_stratified_guard_tier2_needs_both_mean_and_fraction():
+    """A cell whose MEAN is below the floor (-0.515) but whose fraction of
+    individually-violating examples (0.3) doesn't clear the required 0.34
+    must NOT trip tier 2 - both conditions are required, not either. The
+    3 outliers are calibrated to -1.95, above singleton_floor (-2.0), so
+    tier 3 doesn't fire either - isolates tier 2's AND requirement
+    specifically."""
+    cell = [("defocus", 1, -1.95)] * 3 + [("defocus", 1, 0.1)] * 7
+    cell_mean = sum(d for _, _, d in cell) / len(cell)
+    assert cell_mean < -0.5, "fixture must clear the mean condition"
+    records = cell + [("motion", 2, 0.05)] * 40
+    assert_physics_sane_stratified(records) is None  # must not raise
+
+
+def test_stratified_guard_tier3_singleton_even_if_cell_mean_is_fine():
+    """One genuinely catastrophic example, diluted to a fine cell mean by
+    plenty of good neighbours in the SAME cell - tier 2's cell-mean/
+    fraction requirement would miss this on its own, which is exactly why
+    tier 3 exists as a separate, looser-floor, single-example check."""
+    cell = [("defocus", 1, -4.0)] + [("defocus", 1, 0.05)] * 19
+    records = cell + [("motion", 2, 0.05)] * 40
+    with pytest.raises(RuntimeError, match="tier 3, singleton"):
+        assert_physics_sane_stratified(records)
+
+
+def test_stratified_guard_tolerates_ratio_noise_below_the_old_tight_floor():
+    """The reason tier 3's floor is -2.0 and not -0.5: a tight per-example
+    floor at -0.5 would false-trigger on the DRemR ratio-instability this
+    project characterised (metrics.core.degradation_removal_ratio's
+    docstring) - mildly-degraded examples can legitimately swing to -0.5ish
+    on noise alone. A handful of such examples must NOT raise."""
+    # Spread across DIFFERENT cells - real ratio noise produces scattered
+    # singletons (measured: the mildest-denominator third's worst single
+    # case was -0.60, out of 50 examples, not a cell where most examples
+    # cluster this negative), so clustering all three in one cell would
+    # (correctly) trip tier 2 instead and test the wrong thing.
+    noisy_but_fine = [("jpeg", 1, -0.6), ("noise", 2, -0.55), ("mixed", 1, -0.48)]
+    records = noisy_but_fine + [("motion", 2, 0.05)] * 40
+    assert_physics_sane_stratified(records) is None  # must not raise
+
+
+def test_stratified_guard_ignores_non_finite_records():
+    records = [("defocus", 1, float("nan")), ("motion", 2, 0.05)] * 20
+    assert_physics_sane_stratified(records) is None  # must not raise
+
+
+def test_stratified_guard_empty_records_is_a_noop():
+    assert_physics_sane_stratified([]) is None

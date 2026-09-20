@@ -479,33 +479,74 @@ def _detect_blur_reference(img: np.ndarray, ref_logpsd: np.ndarray,
                            fit_improvement_margin: float = 0.3,
                            min_radius: float = 1.5,
                            min_length: float = 5.0,
-                           max_radius: float = 8.0
+                           max_radius: float = 8.0,
+                           motion_over_defocus_margin: float = -0.05
                            ) -> tuple[str, float, float, float]:
     """Reference-based blur presence/type decision - the primary path
     whenever a category reference is available.
 
-    Three gates, all required:
+    Gates, all required:
       1. deficit_margin - the image must actually be missing high-frequency
          energy relative to its own class's clean reference, by a real
          margin (in log-power / nats). This is the physical test periodic
          texture cannot mimic.
-      2. fit_improvement_margin - among the candidate kernel families
-         (defocus, motion), the winning one must substantially reduce the
-         fit residual against the deficit curve versus explaining nothing.
-         A deficit can be real without matching any of our kernel shapes
-         (e.g. sensor-level softening, or - found empirically - highlight
-         clipping from strong exposure changes, which produces a broadband
-         high-frequency deficit that a very small defocus radius fits well
-         enough to pass a loose version of this gate).
-      3. min_radius / min_length - the winning kernel must be non-trivially
-         sized. Found empirically: exposure-clipping's spurious "best fit"
-         defocus radius clustered right around 1.0px, indistinguishable in
-         size from a genuine severity-1 defocus blur (DEFOCUS_RADIUS[0] is
-         also 1.0px) - the deficit-shape gate alone doesn't separate them,
-         because at that size they really do look similar. Requiring a
-         larger minimum trades away severity-1 sensitivity (severity-1
-         defocus, true radius 1.0px, now goes undetected) for rejecting
-         this specific false-positive mode; severity 2+ (radius >=2px) is
+      2. fit_improvement_margin - a candidate kernel family (defocus,
+         motion) must substantially reduce the fit residual against the
+         deficit curve versus explaining nothing, to even be in
+         contention. Computed from each family's OWN best-fitting
+         radius/length over the FULL search range (down to 0), not the
+         min_radius/min_length-gated one - a candidate's raw fit quality
+         must be compared on equal footing, independent of whether it will
+         later be eligible to RETURN. A deficit can be real without
+         matching any of our kernel shapes (e.g. sensor-level softening, or
+         - found empirically - highlight clipping from strong exposure
+         changes, which produces a broadband high-frequency deficit that a
+         very small defocus radius fits well enough to pass a loose
+         version of this gate).
+      3. motion_over_defocus_margin - when BOTH families clear gate 2 (both
+         plausibly explain the deficit), motion needs (motion_improves -
+         defocus_improves) >= this margin to be chosen over defocus, not
+         merely a lower raw MSE by any amount. THE VALUE IS NEGATIVE
+         (-0.05 default), which looks backwards for a "margin" but is
+         calibrated, not a typo: on real MVTec carpet, the misclassified
+         cases this gate exists to fix (severity-1 defocus mistaken for
+         motion) never scored better than -0.24 on this delta, while
+         genuine severity-2+ motion blur legitimately scored as low as
+         -0.03 on the SAME delta (defocus's disc can partially explain a
+         short motion streak's PSD roll-off too, so a single noisy real
+         instantiation of true motion blur can come in slightly BELOW a
+         competing defocus fit and still be the correct answer). A
+         positive threshold looked principled but rejected too many true
+         motion positives (measured: true-positive rate at severity 2
+         dropped from >90% to 71%) without moving the false-positive
+         cluster at all, since it was already separated by a wide margin
+         in the other direction - -0.05 sits inside the real gap between
+         the two measured clusters. If motion doesn't clear this
+         tolerance, defocus is preferred even when it isn't itself
+         eligible to return (see gate 4) - a symmetric kernel is the safer
+         wrong answer than a wrong-oriented motion one, so the fallback
+         when the two are close is "none" (skip deconvolution) via gate 4,
+         never "motion by default" (see PCIM's fail-safe for what "none"
+         does). Root cause of the original bug: a real defocus-blurred
+         image's best-fitting radius can legitimately fall below
+         min_radius (severity-1 blur), and the OLD code's "lowest MSE
+         wins" contest then compared motion's real fit against a
+         placeholder (mse_none) standing in for a floored-out defocus,
+         instead of against defocus's actual (much better) fit - letting a
+         weak motion hypothesis win by default on fine-textured categories
+         (carpet especially) whose periodic structure gives the cepstral
+         search something to lock onto.
+      4. min_radius / min_length - the FINAL, chosen kernel must still be
+         non-trivially sized to actually be returned (not just to compete
+         in gate 2/3). Found empirically: exposure-clipping's spurious
+         "best fit" defocus radius clustered right around 1.0px,
+         indistinguishable in size from a genuine severity-1 defocus blur
+         (DEFOCUS_RADIUS[0] is also 1.0px) - the deficit-shape gate alone
+         doesn't separate them, because at that size they really do look
+         similar. Requiring a larger minimum trades away severity-1
+         sensitivity (severity-1 defocus, true radius 1.0px, now goes
+         undetected as "none" rather than misdetected) for rejecting this
+         specific false-positive mode; severity 2+ (radius >=2px) is
          unaffected. Motion's floor mirrors _motion_cepstral_peak's own
          min_len=6px cepstral search floor - lengths below that were never
          reliably estimated in the first place, so this costs nothing
@@ -526,32 +567,46 @@ def _detect_blur_reference(img: np.ndarray, ref_logpsd: np.ndarray,
 
     mse_none = float(np.mean(ratio[band] ** 2))
 
+    # Best-fitting radius/length over the FULL range (down to 0), used for
+    # BOTH the fit-quality comparison below AND (once chosen) the returned
+    # value - min_radius/min_length gate eligibility to be the final
+    # answer, not eligibility to compete for "which shape fits better."
     r_best, _ = estimate_defocus_radius(img, max_radius=max_radius, ref_logpsd=ref_logpsd)
-    if r_best >= min_radius:
-        model = 2.0 * np.log(_radial_mtf(defocus_kernel(r_best), freq))
-        mse_defocus = float(np.mean((ratio[band] - model[band]) ** 2))
-    else:
-        r_best, mse_defocus = 0.0, mse_none
+    model = (2.0 * np.log(_radial_mtf(defocus_kernel(r_best), freq))
+            if r_best > 0 else np.zeros_like(freq))
+    mse_defocus = float(np.mean((ratio[band] - model[band]) ** 2))
 
     peak = _motion_cepstral_peak(img)
-    if peak["length"] >= min_length:
+    if peak["length"] > 0:
         model = 2.0 * np.log(_radial_mtf(motion_kernel(peak["length"], peak["angle"]), freq))
         mse_motion = float(np.mean((ratio[band] - model[band]) ** 2))
     else:
         mse_motion = mse_none
 
-    best_kind, best_mse = "none", mse_none
-    if mse_defocus < best_mse:
-        best_kind, best_mse = "defocus", mse_defocus
-    if mse_motion < best_mse:
-        best_kind, best_mse = "motion", mse_motion
+    defocus_improves = (mse_none - mse_defocus) / (mse_none + EPS)
+    motion_improves = (mse_none - mse_motion) / (mse_none + EPS)
+    defocus_explains = defocus_improves >= fit_improvement_margin
+    motion_explains = motion_improves >= fit_improvement_margin
 
-    improvement = (mse_none - best_mse) / (mse_none + EPS)
-    if best_kind == "none" or improvement < fit_improvement_margin:
+    if not defocus_explains and not motion_explains:
         return "none", 0.0, 0.0, 0.0
-    if best_kind == "defocus":
+
+    if defocus_explains and motion_explains:
+        motion_wins = (motion_improves - defocus_improves) >= motion_over_defocus_margin
+        if motion_wins and peak["length"] >= min_length:
+            return "motion", 0.0, peak["length"], peak["angle"]
+        if r_best >= min_radius:
+            return "defocus", r_best, 0.0, 0.0
+        return "none", 0.0, 0.0, 0.0  # defocus preferred but too small to trust returning
+
+    if motion_explains:
+        if peak["length"] >= min_length:
+            return "motion", 0.0, peak["length"], peak["angle"]
+        return "none", 0.0, 0.0, 0.0
+
+    if r_best >= min_radius:
         return "defocus", r_best, 0.0, 0.0
-    return "motion", 0.0, peak["length"], peak["angle"]
+    return "none", 0.0, 0.0, 0.0
 
 
 def _detect_blur_blind(img: np.ndarray,

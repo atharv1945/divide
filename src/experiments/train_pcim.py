@@ -69,7 +69,7 @@ from src.metrics.core import defect_retention_ratio, degradation_removal_ratio, 
 from src.models.losses import (
     degradation_consistency_loss, frequency_loss, preservation_loss, reconstruction_loss,
 )
-from src.models.pcim import PCIM, assert_physics_sane
+from src.models.pcim import PCIM, assert_physics_sane_stratified
 from src.utils.paths import checkpoints_dir, dtd_root, load_config, results_dir
 
 EPS = 1e-8
@@ -257,13 +257,15 @@ def evaluate(model: PCIM, eval_set: list[Example], device: str,
     kind k with a finite relative DRR.
 
     Also evaluates x_cons (the pure-physics, no-learned-component path) and,
-    if physics_check is set, raises loudly (assert_physics_sane) when its
-    DRemR falls below physics_floor - x_cons has no mechanism to blame a
-    training-driven excuse for being wrong, so this is a physics-chain bug
-    whenever it fires, not a training issue, and it should stop the run
-    rather than be silently absorbed by hours of further training on top of
-    it (see README/HANDOFF for exactly this happening before this check
-    existed).
+    if physics_check is set, raises loudly (assert_physics_sane_stratified)
+    when its DRemR fails any of that function's three tiers - x_cons has no
+    mechanism to blame a training-driven excuse for being wrong, so this is
+    always a physics-chain bug when it fires, not a training issue, and it
+    should stop the run rather than be silently absorbed by hours of
+    further training on top of it (see README/HANDOFF for exactly this
+    happening before tier 1 alone existed, and eval_pcim_holdout.py's
+    physics_guard_check for why tier 1 alone has a real blind spot an
+    eval-set mean can hide behind).
 
     blur_kind_* counts come from the FIXED eval set's own DBDE estimates
     (computed once, at build_eval_set() time, not re-estimated here) - they
@@ -283,6 +285,7 @@ def evaluate(model: PCIM, eval_set: list[Example], device: str,
     rel_drrs, dremrs, psnrs = [], [], []
     rel_drrs_by_kind: dict[str, list[float]] = {k: [] for k in ANOMALY_KINDS}
     cons_dremrs, cons_psnrs = [], []
+    cons_dremr_records: list[tuple[str, int, float]] = []
     for ex in eval_set:
         x_full_a, x_cons_a, x_full_0, _, _, _, _, _ = _restore_both(model, ex, device)
         r_a = x_full_a.squeeze(0).clamp(0, 1).cpu().numpy().transpose(1, 2, 0)
@@ -308,6 +311,7 @@ def evaluate(model: PCIM, eval_set: list[Example], device: str,
         cons_dremr = degradation_removal_ratio(rc_a, ex.y_a, ex.x_a, ex.mask)
         if np.isfinite(cons_dremr):
             cons_dremrs.append(cons_dremr)
+            cons_dremr_records.append((ex.family, ex.severity, cons_dremr))
         cons_p = psnr(rc_a, ex.x_a, mask=normal_mask)
         if np.isfinite(cons_p):
             cons_psnrs.append(cons_p)
@@ -339,8 +343,9 @@ def evaluate(model: PCIM, eval_set: list[Example], device: str,
         for k in LOSS_TERMS:
             out[f"{k}_scaled"] = sums[k]
 
-    if physics_check and np.isfinite(x_cons_dremr):
-        assert_physics_sane(x_cons_dremr, floor=physics_floor)
+    if physics_check and cons_dremr_records:
+        assert_physics_sane_stratified(cons_dremr_records, aggregate_floor=physics_floor,
+                                       cell_floor=physics_floor)
 
     return out
 
