@@ -4,7 +4,8 @@ import pandas as pd
 import pytest
 
 from src.experiments.eval_grid import (
-    CsvAppender, load_completed_cells, summarise, run, ROW_FIELDS,
+    CsvAppender, load_completed_cells, merge_pixel_summary, summarise, run,
+    ROW_FIELDS, PIXEL_ROW_FIELDS,
 )
 
 
@@ -125,17 +126,60 @@ def test_run_end_to_end_smoke_and_resumes(tmp_path, monkeypatch):
         restorers=["identity", "gaussian"], families=["noise"], severities=[3],
         n_train=6, n_test=4, size=64, smoke=True, seed=0, tag="smoke_grid",
     )
-    csv_path = eg.run(**kwargs)
+    csv_path, pixel_csv_path = eg.run(**kwargs)
     df = pd.read_csv(csv_path)
     assert not df.empty
     assert set(df.restorer) == {"identity", "gaussian"}
     n_rows_first = len(df)
 
+    # smoke's synthetic bad test images carry real paste_anomaly masks
+    # (see src/data/mvtec.py's synthetic_split), so the pixel CSV should
+    # have one row per (restorer, family, severity) cell with finite AUROCs.
+    pix_df = pd.read_csv(pixel_csv_path)
+    assert set(pix_df.columns) == set(PIXEL_ROW_FIELDS)
+    assert len(pix_df) == 2  # identity, gaussian - one cell each
+    assert pix_df.n_pixel_images.gt(0).all()
+    assert pix_df.pix_auroc_method.notna().all()
+
     # re-run with identical args - every cell already complete, no new rows
-    csv_path2 = eg.run(**kwargs)
+    csv_path2, pixel_csv_path2 = eg.run(**kwargs)
     df2 = pd.read_csv(csv_path2)
     assert len(df2) == n_rows_first
+    assert len(pd.read_csv(pixel_csv_path2)) == len(pix_df)
 
     summary = eg.summarise(csv_path)
     assert not summary.empty
     assert "gap_closed" in summary.columns
+
+    merged = eg.merge_pixel_summary(summary, pixel_csv_path)
+    assert "pix_gap_closed" in merged.columns
+    assert merged.pix_gap_closed.notna().all()
+
+
+def test_reconcile_partial_cells_drops_orphaned_image_rows(tmp_path):
+    """Simulates a crash between writing a cell's image rows and its pixel
+    row: the image CSV has a cell the pixel CSV never recorded. On the next
+    run() call that cell must be treated as incomplete (dropped from the
+    image CSV, not left as an undetected duplicate risk) rather than either
+    silently counted as done or re-run into a duplicated image CSV."""
+    import src.experiments.eval_grid as eg
+
+    csv_path = tmp_path / "g.csv"
+    pixel_csv_path = tmp_path / "g_pixel.csv"
+
+    complete_row = _fake_row("identity", "padim", "carpet", "noise", 3, "good",
+                             0, 0, sc=0.1, sd=0.5, sm=0.1)
+    orphan_row = _fake_row("gaussian", "padim", "carpet", "noise", 3, "good",
+                           0, 0, sc=0.1, sd=0.5, sm=0.1)
+    pd.DataFrame([complete_row, orphan_row]).to_csv(csv_path, index=False)
+    pd.DataFrame([dict(restorer="identity", detector="padim", category="carpet",
+                       family="noise", severity=3, n_pixel_images=1,
+                       pix_auroc_clean=1.0, pix_auroc_degraded=0.5,
+                       pix_auroc_method=1.0, pix_gap_closed=1.0)]).to_csv(
+        pixel_csv_path, index=False)
+
+    completed = eg._reconcile_partial_cells(csv_path, pixel_csv_path)
+    assert completed == {("identity", "padim", "carpet", "noise", 3)}
+
+    remaining = pd.read_csv(csv_path)
+    assert set(remaining.restorer) == {"identity"}

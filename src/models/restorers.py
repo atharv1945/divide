@@ -268,6 +268,25 @@ def get_restorer(name: str) -> Restorer:
     if name == "divide":
         from src.models.divide_restorer import build_divide_restorer
         return build_divide_restorer()
+    if name in ("divide_lpres_on", "divide_lpres_off"):
+        # The two L_pres-ablation checkpoints (src/experiments/ablate_lpres.py)
+        # as independently selectable restorers, for Step 3's grid comparison
+        # of whether preserving the defect residual actually helps detection
+        # AUROC. Both were trained from configs/train_pcim_cpu.yaml (this
+        # project trains and evaluates CPU-only throughout, including the
+        # detector harness itself - see DetectorHarness.fit()'s
+        # accelerator="cpu"). Same deferred-error contract as restormer_deblur
+        # below: get_restorer() never raises, the RuntimeError-wrapping
+        # FileNotFoundError fires when the returned Restorer is CALLED.
+        from src.models.divide_restorer import build_divide_restorer_from_run
+        from src.utils.paths import load_config
+        run_name = ("ablate_lpres_lpres_on" if name == "divide_lpres_on"
+                   else "ablate_lpres_lpres_off")
+        try:
+            cfg = load_config("configs/train_pcim_cpu.yaml")
+            return build_divide_restorer_from_run(cfg, run_name, name)
+        except FileNotFoundError as e:
+            return Restorer(name, _deep_unavailable(name, e), tier="deep", needs_gpu=False)
     if name == "restormer_deblur":
         # Not a DEEP_SPECS entry - it composes restormer_motion_deblur and
         # restormer_defocus_deblur, dispatching per image by DBDE's
@@ -285,12 +304,14 @@ def get_restorer(name: str) -> Restorer:
         return deep
     raise KeyError(
         f"unknown restorer {name!r}. "
-        f"classical: {sorted(CLASSICAL)} | deep: {sorted(DEEP_SPECS)} | divide | restormer_deblur"
+        f"classical: {sorted(CLASSICAL)} | deep: {sorted(DEEP_SPECS)} | "
+        f"divide | divide_lpres_on | divide_lpres_off | restormer_deblur"
     )
 
 
 def available_restorers(include_deep: bool = False) -> list[str]:
     names = sorted(CLASSICAL)
     if include_deep:
-        names += sorted(DEEP_SPECS) + ["divide", "restormer_deblur"]
+        names += sorted(DEEP_SPECS) + ["divide", "divide_lpres_on",
+                                        "divide_lpres_off", "restormer_deblur"]
     return names

@@ -239,3 +239,31 @@ def test_divide_restorer_loads_real_checkpoint_dict_not_bare_state_dict(tmp_path
     out = _restore(_img())
     assert out.shape == _img().shape
     assert np.isfinite(out).all()
+
+
+# ------------------------------------------------------- L_pres ablation pair
+
+@pytest.mark.parametrize("name", ["divide_lpres_on", "divide_lpres_off"])
+def test_divide_lpres_variant_loads_real_ablation_checkpoint(name):
+    """Step 3's grid needs both L_pres-ablation checkpoints as independently
+    selectable restorers. This uses the REAL checkpoints already on disk
+    (checkpoints/ablate_lpres_lpres_on.pt / _off.pt, trained by
+    src/experiments/ablate_lpres.py) rather than a smoke stand-in, since
+    the whole point is confirming the exact run_name/config wiring the grid
+    will use actually resolves to a loadable model."""
+    pytest.importorskip("torch")
+    ckpt_name = ("ablate_lpres_lpres_on" if name == "divide_lpres_on"
+                else "ablate_lpres_lpres_off")
+    if not (checkpoints_dir() / f"{ckpt_name}.pt").exists():
+        pytest.skip(f"{ckpt_name}.pt not present in this environment")
+    r = get_restorer(name)
+    assert r.tier == "deep"
+    out = r(_img())
+    assert out.shape == _img().shape
+    assert np.isfinite(out).all()
+
+
+def test_divide_lpres_variants_are_listed_in_available_restorers():
+    names = available_restorers(include_deep=True)
+    assert "divide_lpres_on" in names
+    assert "divide_lpres_off" in names
