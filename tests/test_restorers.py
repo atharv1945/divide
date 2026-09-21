@@ -208,3 +208,34 @@ def test_divide_restorer_without_checkpoint_fails_loudly():
 def test_divide_is_listed_in_available_restorers():
     assert "divide" in available_restorers(include_deep=True)
     assert "divide" not in available_restorers(include_deep=False)
+
+
+def test_divide_restorer_loads_real_checkpoint_dict_not_bare_state_dict(tmp_path, monkeypatch):
+    """Regression test: _restore() used to do
+    `state = torch.load(...); model.load_state_dict(state)`, treating
+    save_checkpoint()'s whole {"model":..., "optimizer":..., "step":...,
+    "rng_state":..., "scale_factors":...} dict as if it WERE the bare model
+    state_dict. That mismatches every real checkpoint train_pcim.py
+    produces and would raise on load_state_dict. Build one via a real
+    smoke-trained run (same shape as a production checkpoint) and confirm
+    it loads and runs end to end."""
+    torch = pytest.importorskip("torch")
+    import src.experiments.train_pcim as tp
+    from src.utils.paths import load_config
+
+    ckpt_dir = tmp_path / "checkpoints"
+    ckpt_dir.mkdir()
+    monkeypatch.setattr(tp, "checkpoints_dir", lambda: ckpt_dir)
+    monkeypatch.setattr("src.models.divide_restorer.checkpoints_dir", lambda: ckpt_dir)
+
+    cfg = load_config("configs/train_pcim_cpu.yaml")
+    cfg = tp._apply_smoke_overrides(cfg)
+    tp.run(cfg, "pcim", device="cpu", resume=False, smoke=True, quiet=True)
+
+    saved = torch.load(ckpt_dir / "pcim.pt", map_location="cpu")
+    assert set(saved.keys()) >= {"model", "optimizer", "step"}
+
+    from src.models.divide_restorer import _restore
+    out = _restore(_img())
+    assert out.shape == _img().shape
+    assert np.isfinite(out).all()

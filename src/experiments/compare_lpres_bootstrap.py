@@ -140,8 +140,8 @@ def main() -> int:
 
     print(f"n_boot: {args.n_boot}, eval set: {args.n} examples, seed {args.seed}\n")
     header = (f"{'kind':10s} {'n':>4s}  {'DRR on':>7s} {'DRR off':>8s} "
-             f"{'Δdrr':>8s} {'95% CI':>18s}  {'corr on':>7s} {'corr off':>8s} "
-             f"{'Δcorr':>7s} {'95% CI':>18s}  {'PSNR Δ':>7s}")
+             f"{'d_drr':>8s} {'95% CI':>18s}  {'corr on':>7s} {'corr off':>8s} "
+             f"{'d_corr':>7s} {'95% CI':>18s}  {'d_PSNR':>7s}")
     print(header)
     for kind, r in result.items():
         d, c, p = r["relative_drr_delta"], r["residual_corr_delta"], r["psnr_delta"]
