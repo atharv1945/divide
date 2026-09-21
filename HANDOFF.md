@@ -4,49 +4,60 @@ You have a GPU and (presumably) no context on this project beyond this document.
 
 ## What this project claims
 
-**This section was rewritten after the go/no-go study actually ran (CPU, no
-GPU needed in the end) and produced a real result — see README.md's "The
-claim" for the full argument and numbers. Summary below; don't skip the
-README section if you're deciding what to build next.**
+**This section was rewritten after the full investigation finished (four CPU
+studies, no GPU needed for any of them) — see README.md's "The claim" for
+every number and the full reasoning. This is the short version; don't build
+on it without reading the README section at least once.**
 
-The original, broader argument was: industrial visual inspection pipelines
-run capture → restore → detect, and that step is self-defeating in general —
-any restoration model, classical or deep, is fundamentally a denoiser, a
-surface defect is statistically a sparse anomaly, so a defect *is* noise to a
-model trained to reconstruct a clean instance of its class, and it gets
-erased along with genuine degradation.
+**Original hypothesis.** Restoration is self-defeating for industrial
+inspection: any restorer, classical or deep, is fundamentally a denoiser, a
+surface defect is a sparse anomaly, so a defect *is* noise to a model trying
+to reconstruct a clean instance of its class, and it gets erased with the
+genuine degradation. DIVIDE's answer was to invert the physical degradation
+instead, because an inverse operator can be content-agnostic in a way a
+learned denoiser structurally cannot.
 
-**That broad version was tested and is not supported.** Restormer's
-`real_denoising` checkpoint — a real, competently-functioning learned
-restorer, not a broken one — does genuine restoration (+2.3dB PSNR) while
-preserving defect signal (relative DRR 0.918 mean, 0.881 on scratches). The
-data instead shows a mechanism split: restorers that **deconvolve** (invert
-a blur kernel) erode scratches severely — classical Wiener 0.335, a
-classical deconvolution pipeline 0.516 — while restorers that merely
-**denoise** (attenuate high-frequency energy without inverting anything) do
-not, learned or classical alike (Restormer, NLM, Gaussian, bilateral:
-0.88–0.98).
+**Tested three ways, the first two falsified it:**
 
-**The narrowed, supported claim:** deblurring-class restoration erases
-sparse defects, because deconvolution is an ill-posed inverse problem that
-uses a prior to decide what the sharp image should have looked like, and a
-defect looks exactly like what that prior is trained to remove. DIVIDE
-performs deblurring in a way that structurally cannot do this — PCIM's
-Wiener data step is closed-form (no learned parameters), and
-`tests/test_pcim.py::test_hqs_without_prox_is_linear` verifies directly that
-the deconvolution path is a provably affine, content-agnostic map of the
-input. DIVIDE was always a deconvolution method (the Wiener step is its
-core), so this is a sharper version of the original bet, not a retreat: it's
-backed by the most dramatic number this project has produced (0.335 on
-scratches), and it explains why naive restore-then-detect specifically fails
-in industrial settings, where motion blur and defocus dominate.
+1. Learned denoiser (Restormer `real_denoising`) — preserves defects
+   (scratch relative DRR 0.867, genuine restoration alongside it, +2.3dB
+   PSNR). Not supported.
+2. Learned deblurrer (Restormer's own Motion/Defocus_Deblurring checkpoints,
+   not the denoising one) — also preserves (scratch relative DRR 1.22,
+   residual correlation 0.70, above the do-nothing baseline's own 0.59). Not
+   supported either.
+3. Classical single-shot Wiener deconvolution — this is the one that erodes.
+   Scratch relative DRR 0.08–0.57 depending on scope, residual correlation
+   pinned at/near zero across five orders of magnitude of its own
+   regularization constant. Confirmed, not a fluke: this is the most
+   dramatic and best-supported number this project has produced.
 
-A follow-up run (`results/drr_study_deblur*`, Restormer's own
-Motion_Deblurring/Defocus_Deblurring checkpoints) is checking whether a
-*learned* deblurrer erodes defects the same way classical Wiener does, or
-whether Wiener's erosion is a regularization artifact specific to the
-classical method. Both answers are reportable; check README.md for whichever
-landed before you rely on this section.
+**The mechanism** (a bridging ablation, classical Wiener → PCIM's `x_cons`,
+one variable at a time): switching one-shot division for PCIM's unrolled
+half-quadratic-splitting recursion, at matched regularization strength,
+flips scratch residual correlation from -0.05 to 0.86. Regularization
+strength turned out NOT to be the mechanism (the reverse-direction check -
+disabling PCIM's `nsr_floor` - did not bring erosion back); iteration is.
+Candidate reason: each HQS step anchors toward the previous iterate rather
+than committing to the full inversion in one shot.
+
+**What DIVIDE actually demonstrates:** its unrolled HQS formulation is
+exactly the property that avoids single-shot Wiener's erosion -
+`tests/test_pcim.py::test_hqs_without_prox_is_linear` verifies the
+gated-off path is provably affine and content-agnostic. The architecture was
+right; the original justification ("restoration in general erases defects")
+was not. DIVIDE does not solve a problem all restoration methods have -
+competent denoisers and deblurrers mostly don't have it - it demonstrates
+that one specific, real failure mode (single-shot closed-form inversion) is
+avoidable and locates the property that avoids it. That failure mode is
+still the one industrial inspection is most exposed to, since motion blur
+and defocus - exactly what a naive Wiener step gets reached for - dominate
+real inspection settings.
+
+Full numbers, the per-config table, the nsr sweep figure, and the two
+methodological findings about DRemR and DRR/residual-correlation are in
+README.md's "The claim" - read that before deciding what (if anything) still
+needs testing.
 
 ## Setup
 
@@ -66,7 +77,7 @@ Confirm the environment before touching any data or GPU:
 ./scripts/smoke.sh
 ```
 
-This runs all ~244 unit tests, a tiny end-to-end DRR study, a tiny end-to-end evaluation-grid run (real PaDiM fit + score, on synthetic images), a tiny PCIM training run including checkpointing, a tiny L_pres ablation, tiny DBDE validation figures, a deep-restorer fail-loud check, and a Gradio Blocks construction check — entirely on CPU, entirely on synthetic data, in a couple of minutes. It must print `ALL GREEN` before you do anything else. If it doesn't, stop and fix that first; nothing downstream is trustworthy otherwise.
+This runs all 300+ unit tests, a tiny end-to-end DRR study, a tiny end-to-end evaluation-grid run (real PaDiM fit + score, on synthetic images), a tiny PCIM training run including checkpointing, a tiny L_pres ablation, tiny DBDE validation figures, a deep-restorer registry check (fails loud if a restorer's weights are absent, runs and checks sane output if present - NAFNet/Restormer's are present on this project's dev machine now), and a Gradio Blocks construction check — entirely on CPU, in a few minutes. It must print `ALL GREEN` before you do anything else. If it doesn't, stop and fix that first; nothing downstream is trustworthy otherwise.
 
 ### Data
 
@@ -143,7 +154,14 @@ Run these in order. Each step names its expected wall-clock cost on a mid-range 
 ```
 *Cost:* under a minute, CPU only. *Output:* console only, no files. *Correct:* `ALL GREEN`. If this fails here but passed on the laptop, it's this machine's environment (see Troubleshooting), not new code.
 
-**2. THE GO/NO-GO EXPERIMENT.** Do this before anything else below — it is the entire reason to build DIVIDE or not.
+**2. THE GO/NO-GO EXPERIMENT - ALREADY DONE, on CPU, no GPU needed.** The
+steps below describe how this was originally planned to run; it actually ran
+on CPU this session (NAFNet/Restormer both run in-process on CPU, ~2-7s/image
+- see `src/models/deep_restorers.py`), was carried through two follow-up
+studies, and is written up with every number in README.md's "The claim" -
+read that first. DiffBIR is the only piece here that genuinely still needs a
+GPU. Keep reading this section only if you want to re-run or extend the
+study; it's not a gate you still need to pass.
 
 ```bash
 python -m src.experiments.drr_study --categories carpet bottle screw \
@@ -152,11 +170,11 @@ python -m src.experiments.drr_study --categories carpet bottle screw \
 
 *Cost:* the classical restorers are fast (CPU-bound, a few minutes total); the deep ones dominate — NAFNet/Restormer are sub-second per image, DiffBIR is a full diffusion sampler (~50 steps) and will be by far the slowest, likely tens of minutes for this whole run depending on image count. Expect roughly 1–2 GPU-hours total; if DiffBIR is unbearably slow, run it in a separate pass with fewer images first.
 
-*Output:* `results/drr_study.csv` (per-image rows), `results/drr_study_summary.csv`, `results/drr_study_verdict.json`, and three figures under `figures/` — `drr_frontier.png` is the one to look at first.
+*Output:* `results/<tag>.csv` (per-image rows), `results/<tag>_summary.csv`, `results/<tag>_verdict.json`, and three tag-suffixed figures under `figures/` (`--tag` defaults to `drr_study`) — `drr_frontier_<tag>.png` is the one to look at first.
 
 *Correct result looks like:* the console prints a `DEFECT RETENTION BY RESTORER` table and a `VERDICT: GO / NO-GO / MARGINAL` line with a stated reason. A run that silently drops nafnet/restormer/diffbir from the restorer list (check the printed `restorers :` line at the top of the output) without an error message means their weights weren't found — that is a **wrong, misleadingly optimistic run**, not a valid one, because the whole point of this study is measuring what *learned* restorers do; the classical baselines alone were already run on the laptop and are not the verdict. If a restorer's weights are missing, the script prints its exact `RuntimeError` to stderr and drops it from that point forward — re-check the fix and re-run rather than accepting a partial verdict.
 
-**STOP HERE.** Read `results/drr_study_summary.csv`, the scratch-only breakdown, and `figures/drr_frontier.png`. Send me these back before writing or running anything past this point.
+**STOP HERE.** Read `results/<tag>_summary.csv`, the scratch-only breakdown, and `figures/drr_frontier_<tag>.png`. Send me these back before writing or running anything past this point.
 
 - **relative DRR < 0.5** → GO, restorers substantially erase defects, the thesis holds.
 - **relative DRR > 0.8** → NO-GO, restorers largely preserve defects, the premise doesn't hold here.
@@ -269,22 +287,22 @@ These ran on this laptop, on real MVTec data, and are genuine results — but re
 - *Reference PSD estimation is dramatically more accurate than blind*, especially for subtle blur: reference-based hits ~0 MAE at every severity tested; blind is close except at the smallest defocus radius (1px true), where it's off by ~0.17px. Also final — this doesn't depend on any learned component.
 - *Noise sigma is systematically underestimated at higher severities* — the estimated value tracks roughly half the true sigma once severity increases (see `dbde_parameter_accuracy.png`, rightmost panel). This is a real calibration gap in `estimate_noise_sigma`'s flat-patch PCA approach, not a fluke of one run; worth either fixing (recalibrating the eigenvalue-quantile logic) or at minimum accounting for in anything downstream that consumes DBDE's noise estimate directly (PCIM's VST does — see "Known fragile points").
 
-**Classical DRR study, real MVTec, full grid** (`results/drr_study_real.csv`, `results/drr_study_real_summary.csv`, `figures/drr_frontier.png` etc. — regenerated for this run, same filenames as the go/no-go study, so if you re-run step 2 above it will overwrite these; rename or move them first if you want to keep both):
+**Classical DRR study, real MVTec, full grid** (`results/drr_study_real.csv`, `results/drr_study_real_summary.csv`, `figures/drr_frontier_drr_study_real.png` etc. — tag-suffixed, does not collide with the go/no-go study's own figures):
 
-Ran to completion: 14,400 rows (3 categories × 20 images × 6 families × 5 severities × 8 classical restorers), script-reported verdict **NO-GO** (mean relative DRR 1.039 > 0.8) — but the mean hides a real, non-obvious split that the per-restorer table shows clearly:
+Ran to completion: 14,400 rows (3 categories × 20 images × 6 families × 5 severities × 8 classical restorers), script-reported verdict **NO-GO** (mean relative DRR 1.002 > 0.8, ratio-of-means — see README's "The claim" for why that convention and not a per-example-averaged one) — but the mean hides a real, non-obvious split that the per-restorer table shows clearly:
 
-| restorer | relative DRR (mean) | reading |
+| restorer | relative DRR (ratio-of-means) | reading |
 |---|---|---|
-| clahe | 1.64 | amplifies the residual (contrast-enhancement artefact, not real preservation) |
-| msrcr | 1.79 | same, more so |
+| msrcr | 1.60 | amplifies the residual (contrast-enhancement artefact, not real preservation) |
+| clahe | 1.57 | same |
 | identity | 1.00 | baseline, by construction |
-| bilateral | 0.97 | barely touches the defect |
+| bilateral | 0.98 | barely touches the defect |
 | nlm | 0.96 | barely touches the defect |
 | gaussian | 0.90 | mild erosion |
-| wiener | 0.52 | erases roughly half the defect residual |
-| classical_pipeline | 0.50 | same |
+| wiener | 0.51 | erases roughly half the defect residual |
+| classical_pipeline | 0.49 | same |
 
-The plain denoisers (bilateral/nlm/gaussian) sit close to 1.0 across every severity (`figures/drr_vs_severity.png`) — spatial smoothing alone doesn't do much to a scratch or blob at these degradation levels. The deconvolution-based methods (wiener, and `classical_pipeline`, which chains illumination correction, denoising, and Wiener deblurring) sit consistently around 0.5, worst at high severity (down to ~0.44 at severity 4-5) — deconvolution's ringing/sharpening measurably suppresses fine defect structure, most visibly for scratches specifically (`figures/drr_by_kind.png`: wiener's scratch column is its lowest of the three kinds). clahe/msrcr's numbers above 1.0 are not "better than identity" in any meaningful sense - their contrast stretching inflates the raw pixel-difference metric on both normal and defect regions alike (see their `dremr_mean` in `results/drr_study_real_summary.csv`, both strongly negative - they move *further* from the clean image than the degraded input already was).
+The plain denoisers (bilateral/nlm/gaussian) sit close to 1.0 across every severity (`figures/drr_vs_severity_drr_study_real.png`) — spatial smoothing alone doesn't do much to a scratch or blob at these degradation levels. The deconvolution-based methods (wiener, and `classical_pipeline`, which chains illumination correction, denoising, and Wiener deblurring) sit consistently around 0.5 — deconvolution's ringing/sharpening measurably suppresses fine defect structure, most visibly for scratches specifically (`figures/drr_by_kind_drr_study_real.png`). clahe/msrcr's numbers above 1.0 are not "better than identity" in any meaningful sense - their contrast stretching inflates the raw pixel-difference metric on both normal and defect regions alike (see their `dremr_mean` in `results/drr_study_real_summary.csv`, both strongly negative - they move *further* from the clean image than the degraded input already was). This is the same split that later analysis (see README's "The claim") traced to a mechanism - deconvolution vs. denoising - and then to unrolled iteration vs. one-shot inversion specifically, using exactly this wiener/classical_pipeline result as the erosion anchor.
 
 At the time this was written, this was **not the go/no-go verdict** — classical restorers only, with the note that classical restorers alone can't settle the question the project is actually about. **That measurement has since happened** (`results/drr_study_gonogo*`, see "What this project claims" above): a real learned denoiser (Restormer) preserves defects the same way the classical denoisers here do, while classical deconvolution erodes them the same way it does here — confirming the split predicted by this table is about mechanism (deconvolve vs. denoise), not learned vs. classical. NAFNet's result in that run doesn't extend this table's pattern one way or the other - it was out-of-distribution on synthetic degradations (see the caveat in "What this project claims").
 
@@ -301,7 +319,7 @@ Two bugs were already found and fixed before I started (see the README's "Two bu
 - **`reference_psd()` only means what it claims if the reference images and test images are the same part.** Caught this one myself while building `dbde_validation.py`: an early version pooled all three categories into one shuffled list before splitting into reference/test, so a carpet reference PSD occasionally got compared against a screw test image. The result looked like "reference-based blur estimation is dramatically WORSE than blind" (a −2133% "improvement"), which contradicted both the module's docstring and basic intuition — exactly the kind of result that's tempting to write down as a surprising finding instead of a bug. Fixed by keeping reference and test images within one category (`reference_vs_blind_data()`'s docstring states the requirement now); the real result (reference dramatically better, not worse) is in the "CPU-preliminary results" section above. If you extend this comparison anywhere else, keep the same-category invariant in mind.
 - **DBDE's noise-sigma estimate is systematically low at higher severities** (see "CPU-preliminary results" above) — roughly half the true value once severity increases. PCIM's generalised Anscombe VST (`src/models/pcim.py`) consumes this estimate directly and has never been trained, so it has never had a chance to compensate for this bias through learning. If PCIM's denoising looks conspicuously weak at high severities once you do train it, check whether this is the reason before assuming it's a PCIM architecture problem.
 - **PCIM's loss terms had a real magnitude imbalance — now fixed, not just noted.** `L_freq` (FFT-magnitude L1, unnormalized) came out one to two orders of magnitude larger than `L_rec`/`L_deg`/`L_pres` in every CPU run, dominated by DC-adjacent bins; left alone, hours of optimisation would have gone almost entirely to spectral fidelity, telling you nothing about `L_pres`. `train_pcim.py` now measures each term's raw magnitude on the first real batch and computes per-term scale factors (`calibrate_scale_factors()`) before the configured `w_*` weights apply — behind `loss.normalize` (default true), stored in the checkpoint so a resumed run doesn't recalibrate from a different batch. Both `<term>_raw` and `<term>_scaled` are logged per step. This is a first-batch calibration, not a guarantee for every subsequent batch — if one term still visibly dominates `*_scaled` deep into a real run, that's a genuine finding (that term may be harder to reduce, not just larger), not evidence the fix failed.
-- **`drr_study.py`'s figure filenames are not tag-prefixed.** `drr_frontier.png`/`drr_vs_severity.png`/`drr_by_kind.png` are always written under those exact names regardless of `--tag`, so running `./scripts/smoke.sh` (or any other `drr_study.py` invocation, smoke or real) after generating real-data figures silently overwrites them in the working tree - happened to me twice finishing this handoff, caught only because `git status` showed the real figures as modified. Nothing is lost (git history has the committed real versions - `git checkout -- figures/drr_*.png` restores them), but if you generate a real result, commit it *before* running `smoke.sh` again, or expect to restore from git afterward.
+- **FIXED, was a real recurring problem: `drr_study.py`'s figure filenames used to not be tag-prefixed.** `drr_frontier.png`/`drr_vs_severity.png`/`drr_by_kind.png` used to be written under those exact names regardless of `--tag`, so running `./scripts/smoke.sh` (or any other `drr_study.py` invocation, smoke or real) after generating real-data figures silently overwrote them in the working tree - hit repeatedly across this project's sessions, including twice finishing the original version of this handoff. `make_figures()` now takes a `tag` argument and suffixes all three filenames with it (`drr_frontier_<tag>.png` etc); `main()` passes `--tag` through automatically. The old unsuffixed files are gone from the repo, replaced by tag-suffixed ones per study (`drr_study_gonogo`, `drr_study_deblur`, `drr_study_deblur_corr`, `wiener_bridge_ablation`, `drr_study_real`). If you call `make_figures()` directly without a tag it still writes the old unsuffixed names - pass one.
 - **The PCIM training script's resumability is only as good as its RNG-state save/restore, and that's numpy-Generator-specific.** `save_checkpoint()`/`load_checkpoint()` in `train_pcim.py` persist `rng.bit_generator.state` for the one `numpy.random.Generator` that drives all data sampling (`paste_anomaly`, family/severity choice, `degrade_pair`'s seed). If you ever introduce a second independent source of randomness into the training loop (e.g. a stochastic model component, or `torch`-side augmentation), it won't be captured by this checkpoint, and a resumed run will silently diverge from what an uninterrupted run would have done — re-run `test_resumed_run_continues_the_same_sample_sequence_as_uninterrupted` after any change near the sampling path, the same way you'd re-run the counterfactual-pair tests after touching `degrade_pair()`.
 
 ## Troubleshooting
