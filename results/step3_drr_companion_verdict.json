@@ -1,0 +1,7 @@
+{
+  "verdict": "NO-GO",
+  "reason": "mean DRR 0.973 > 0.8 - restorers largely preserve defects. The premise does not hold on this setup. Before pivoting, check harder degradations and the scratch-only figure below.  Scratch-only mean DRR: 0.858 (the case that matters most).",
+  "n_rows": 1440,
+  "mean_drr": 0.7728082074724006,
+  "mean_drr_rel": 0.9733329135828925
+}
