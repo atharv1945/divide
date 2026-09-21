@@ -36,7 +36,7 @@ def test_holdout_eval_and_ratio_check_run_end_to_end(tmp_path, monkeypatch):
     assert len(rows) == 6
     for key in ("category", "kind", "family", "severity", "den", "dremr", "psnr",
                "dremr_cons", "psnr_cons", "dremr_deg", "psnr_deg",
-               "drr_method", "drr_id",
+               "drr_method", "drr_id", "residual_corr",
                "blur_kind", "kernel_size", "wiener_ran"):
         assert key in rows[0]
     # degraded-vs-itself is 0.0 by construction (see

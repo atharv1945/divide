@@ -51,7 +51,8 @@ from src.experiments.train_pcim import (
     load_data_pools,
 )
 from src.metrics.core import (
-    defect_retention_ratio, degradation_magnitude, degradation_removal_ratio, psnr,
+    defect_residual_correlation, defect_retention_ratio,
+    degradation_magnitude, degradation_removal_ratio, psnr,
 )
 from src.models.pcim import PCIM
 from src.utils.paths import dtd_root, load_config
@@ -98,6 +99,7 @@ def per_example_eval(model: PCIM, eval_set, device: str) -> list[dict]:
 
         drr_id = defect_retention_ratio(ex.y_a, ex.y_0, ex.x_a, ex.x0, ex.mask)
         drr_method = defect_retention_ratio(r_a, r_0, ex.x_a, ex.x0, ex.mask)
+        residual_corr = defect_residual_correlation(r_a, r_0, ex.x_a, ex.x0, ex.mask)
 
         den = degradation_magnitude(ex.y_a, ex.x_a, ex.mask)
         dremr = degradation_removal_ratio(r_a, ex.y_a, ex.x_a, ex.mask)
@@ -125,6 +127,7 @@ def per_example_eval(model: PCIM, eval_set, device: str) -> list[dict]:
                          # docstring in metrics/core.py and summarize()
                          # below, which is the only place these combine.
                          drr_method=drr_method, drr_id=drr_id,
+                         residual_corr=residual_corr,
                          blur_kind=est.blur_kind, kernel_size=kernel_size,
                          wiener_ran=wiener_ran))
     return rows
