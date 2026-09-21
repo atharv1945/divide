@@ -65,7 +65,9 @@ from src.data.mvtec import load_train_normals, synthetic_split
 from src.dbde.estimator import DegradationEstimate, estimate, reference_psd
 from src.degrade.anomaly import ANOMALY_KINDS, TextureBank, paste_anomaly
 from src.degrade.simulator import degrade_pair
-from src.metrics.core import defect_retention_ratio, degradation_removal_ratio, psnr
+from src.metrics.core import (
+    defect_residual_correlation, defect_retention_ratio, degradation_removal_ratio, psnr,
+)
 from src.models.losses import (
     degradation_consistency_loss, frequency_loss, preservation_loss, reconstruction_loss,
 )
@@ -256,6 +258,13 @@ def evaluate(model: PCIM, eval_set: list[Example], device: str,
     texture. rel_drr_by_kind[k] is nan if the eval set has no examples of
     kind k with a finite relative DRR.
 
+    residual_corr_{kind} (defect_residual_correlation, per kind) is
+    reported alongside relative_drr_{kind} - DRR is a magnitude ratio and
+    cannot by itself distinguish genuine defect preservation from ringing
+    at similar energy once it's near or above ~1.0 (see that function's
+    docstring), which is exactly the regime a real L_pres effect would
+    need to be read in.
+
     Also evaluates x_cons (the pure-physics, no-learned-component path) and,
     if physics_check is set, raises loudly (assert_physics_sane_stratified)
     when its DRemR fails any of that function's three tiers - x_cons has no
@@ -291,6 +300,7 @@ def evaluate(model: PCIM, eval_set: list[Example], device: str,
     drr_methods, drr_ids, dremrs, psnrs = [], [], [], []
     drr_methods_by_kind: dict[str, list[float]] = {k: [] for k in ANOMALY_KINDS}
     drr_ids_by_kind: dict[str, list[float]] = {k: [] for k in ANOMALY_KINDS}
+    residual_corrs_by_kind: dict[str, list[float]] = {k: [] for k in ANOMALY_KINDS}
     cons_dremrs, cons_psnrs = [], []
     cons_dremr_records: list[tuple[str, int, float]] = []
     for ex in eval_set:
@@ -307,6 +317,15 @@ def evaluate(model: PCIM, eval_set: list[Example], device: str,
             drr_ids.append(drr_id)
             drr_methods_by_kind.setdefault(ex.kind, []).append(drr_method)
             drr_ids_by_kind.setdefault(ex.kind, []).append(drr_id)
+
+        # Shape check alongside DRR's magnitude check - see
+        # defect_residual_correlation's docstring: DRR alone can't tell
+        # genuine preservation apart from ringing at similar energy once
+        # it's >= ~1.0, which is exactly the regime a real L_pres effect
+        # would show up in.
+        rcorr = defect_residual_correlation(r_a, r_0, ex.x_a, ex.x0, ex.mask)
+        if np.isfinite(rcorr):
+            residual_corrs_by_kind.setdefault(ex.kind, []).append(rcorr)
 
         dremr = degradation_removal_ratio(r_a, ex.y_a, ex.x_a, ex.mask)
         if np.isfinite(dremr):
@@ -346,6 +365,8 @@ def evaluate(model: PCIM, eval_set: list[Example], device: str,
     for kind in ANOMALY_KINDS:
         out[f"relative_drr_{kind}"] = _ratio_of_means(
             drr_methods_by_kind.get(kind, []), drr_ids_by_kind.get(kind, []))
+        vals = residual_corrs_by_kind.get(kind, [])
+        out[f"residual_corr_{kind}"] = float(np.mean(vals)) if vals else float("nan")
 
     blur_counts = Counter(ex.est.blur_kind for ex in eval_set)
     for kind in ("none", "defocus", "motion"):
@@ -483,6 +504,7 @@ def run(cfg: dict, run_name: str, device: str | None = None,
     eval_fields = ["step", "relative_drr", "dremr", "psnr_normal", "n",
                   "x_cons_dremr", "x_cons_psnr_normal"]
     eval_fields += [f"relative_drr_{k}" for k in ANOMALY_KINDS]
+    eval_fields += [f"residual_corr_{k}" for k in ANOMALY_KINDS]
     eval_fields += ["blur_kind_none", "blur_kind_defocus", "blur_kind_motion"]
     eval_fields += [f"{k}_scaled" for k in LOSS_TERMS]
     eval_csv = CsvLogger(results_dir() / f"{run_name}_eval.csv", eval_fields)

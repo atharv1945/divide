@@ -81,6 +81,10 @@ def run_ablation(base_cfg: dict, run_prefix: str, device: str | None = None,
     result = dict(
         lpres_on=on_final, lpres_off=off_final,
         relative_drr_delta=on_final["relative_drr"] - off_final["relative_drr"],
+        scratch_relative_drr_delta=(on_final.get("relative_drr_scratch", float("nan"))
+                                    - off_final.get("relative_drr_scratch", float("nan"))),
+        scratch_residual_corr_delta=(on_final.get("residual_corr_scratch", float("nan"))
+                                     - off_final.get("residual_corr_scratch", float("nan"))),
     )
     return result
 
@@ -109,12 +113,21 @@ def main() -> int:
     out_path = results_dir() / f"{args.run_prefix}_result.json"
     out_path.write_text(json.dumps(result, indent=2))
 
+    on, off = result["lpres_on"], result["lpres_off"]
     print("\n" + "=" * 60)
     print("L_pres ABLATION")
     print("=" * 60)
-    print(f"relative DRR, L_pres ON  : {result['lpres_on']['relative_drr']:.4f}")
-    print(f"relative DRR, L_pres OFF : {result['lpres_off']['relative_drr']:.4f}")
-    print(f"delta (on - off)         : {result['relative_drr_delta']:+.4f}")
+    print(f"{'':28s} {'ON':>10s} {'OFF':>10s} {'delta':>10s}")
+    print(f"{'relative DRR (overall)':28s} {on['relative_drr']:>10.4f} "
+         f"{off['relative_drr']:>10.4f} {result['relative_drr_delta']:>+10.4f}")
+    print(f"{'relative DRR (scratch)':28s} {on.get('relative_drr_scratch', float('nan')):>10.4f} "
+         f"{off.get('relative_drr_scratch', float('nan')):>10.4f} "
+         f"{result['scratch_relative_drr_delta']:>+10.4f}")
+    print(f"{'residual corr (scratch)':28s} {on.get('residual_corr_scratch', float('nan')):>10.4f} "
+         f"{off.get('residual_corr_scratch', float('nan')):>10.4f} "
+         f"{result['scratch_residual_corr_delta']:>+10.4f}")
+    print(f"{'PSNR normal (dB)':28s} {on['psnr_normal']:>10.3f} {off['psnr_normal']:>10.3f} "
+         f"{on['psnr_normal'] - off['psnr_normal']:>+10.3f}")
     print(f"\nresult : {out_path}")
     return 0
 
