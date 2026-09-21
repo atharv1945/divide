@@ -65,7 +65,7 @@ from src.data.mvtec import load_train_normals, synthetic_split
 from src.dbde.estimator import DegradationEstimate, estimate, reference_psd
 from src.degrade.anomaly import ANOMALY_KINDS, TextureBank, paste_anomaly
 from src.degrade.simulator import degrade_pair
-from src.metrics.core import defect_retention_ratio, degradation_removal_ratio, psnr, relative_drr
+from src.metrics.core import defect_retention_ratio, degradation_removal_ratio, psnr
 from src.models.losses import (
     degradation_consistency_loss, frequency_loss, preservation_loss, reconstruction_loss,
 )
@@ -282,8 +282,15 @@ def evaluate(model: PCIM, eval_set: list[Example], device: str,
     one file, not split between losses.csv and eval.csv.
     """
     model.eval()
-    rel_drrs, dremrs, psnrs = [], [], []
-    rel_drrs_by_kind: dict[str, list[float]] = {k: [] for k in ANOMALY_KINDS}
+    # drr_methods/drr_ids accumulate RAW per-example values, not per-example
+    # ratios - relative DRR is reported as ratio-of-means
+    # (mean(drr_method)/mean(drr_id)), never mean-of-per-example-ratios. See
+    # relative_drr's docstring in metrics/core.py: mean-of-ratios is
+    # dominated by whichever examples have a small drr_id denominator, the
+    # same instability DRemR has at small degradation magnitudes.
+    drr_methods, drr_ids, dremrs, psnrs = [], [], [], []
+    drr_methods_by_kind: dict[str, list[float]] = {k: [] for k in ANOMALY_KINDS}
+    drr_ids_by_kind: dict[str, list[float]] = {k: [] for k in ANOMALY_KINDS}
     cons_dremrs, cons_psnrs = [], []
     cons_dremr_records: list[tuple[str, int, float]] = []
     for ex in eval_set:
@@ -295,10 +302,11 @@ def evaluate(model: PCIM, eval_set: list[Example], device: str,
 
         drr_id = defect_retention_ratio(ex.y_a, ex.y_0, ex.x_a, ex.x0, ex.mask)
         drr_method = defect_retention_ratio(r_a, r_0, ex.x_a, ex.x0, ex.mask)
-        rel = relative_drr(drr_method, drr_id)
-        if np.isfinite(rel):
-            rel_drrs.append(rel)
-            rel_drrs_by_kind.setdefault(ex.kind, []).append(rel)
+        if np.isfinite(drr_method) and np.isfinite(drr_id):
+            drr_methods.append(drr_method)
+            drr_ids.append(drr_id)
+            drr_methods_by_kind.setdefault(ex.kind, []).append(drr_method)
+            drr_ids_by_kind.setdefault(ex.kind, []).append(drr_id)
 
         dremr = degradation_removal_ratio(r_a, ex.y_a, ex.x_a, ex.mask)
         if np.isfinite(dremr):
@@ -317,17 +325,27 @@ def evaluate(model: PCIM, eval_set: list[Example], device: str,
             cons_psnrs.append(cons_p)
 
     model.train()
+
+    def _ratio_of_means(nums: list[float], dens: list[float]) -> float:
+        if not nums or not dens:
+            return float("nan")
+        m_den = float(np.mean(dens))
+        if not np.isfinite(m_den) or abs(m_den) <= EPS:
+            return float("nan")
+        return float(np.mean(nums) / m_den)
+
     x_cons_dremr = float(np.mean(cons_dremrs)) if cons_dremrs else float("nan")
     out = dict(
-        relative_drr=float(np.mean(rel_drrs)) if rel_drrs else float("nan"),
+        relative_drr=_ratio_of_means(drr_methods, drr_ids),
         dremr=float(np.mean(dremrs)) if dremrs else float("nan"),
         psnr_normal=float(np.mean(psnrs)) if psnrs else float("nan"),
         n=len(eval_set),
         x_cons_dremr=x_cons_dremr,
         x_cons_psnr_normal=float(np.mean(cons_psnrs)) if cons_psnrs else float("nan"),
     )
-    for kind, vals in rel_drrs_by_kind.items():
-        out[f"relative_drr_{kind}"] = float(np.mean(vals)) if vals else float("nan")
+    for kind in ANOMALY_KINDS:
+        out[f"relative_drr_{kind}"] = _ratio_of_means(
+            drr_methods_by_kind.get(kind, []), drr_ids_by_kind.get(kind, []))
 
     blur_counts = Counter(ex.est.blur_kind for ex in eval_set)
     for kind in ("none", "defocus", "motion"):

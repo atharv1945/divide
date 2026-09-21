@@ -98,7 +98,7 @@ def defect_retention_ratio(restored_anom: np.ndarray,
 
 
 def relative_drr(drr_method: float, drr_identity: float) -> float:
-    """DRR normalised by the no-op baseline.
+    """DRR normalised by the no-op baseline for ONE example.
 
     Raw DRR conflates two different losses: the degradation itself already
     attenuates a defect (blur spreads it, quantisation truncates it) before
@@ -108,6 +108,27 @@ def relative_drr(drr_method: float, drr_identity: float) -> float:
 
     Report both: raw DRR says how much defect signal reaches the detector,
     relative DRR says how much the restorer destroyed.
+
+    AGGREGATION WARNING - this project's convention, stated once here so
+    every caller follows it: when reporting relative DRR over a SET of
+    examples (a restorer's mean, a per-kind breakdown, a per-severity
+    curve), aggregate as RATIO-OF-MEANS - mean(drr_method)/mean(drr_identity)
+    across the set - never as MEAN-OF-PER-EXAMPLE-RATIOS (mean of calling
+    this function once per example and averaging the results). Mean-of-
+    ratios is dominated by whichever examples happen to have a small
+    drr_identity denominator, the exact same instability
+    degradation_removal_ratio's docstring documents for DRemR at small
+    degradation magnitudes - a handful of examples with a nearly-undamaged
+    identity baseline can blow up their individual ratio and drag a mean
+    far from what the aggregate data actually shows. Measured concretely in
+    this project (src/experiments/drr_study.py, the bridging-ablation
+    table): mean-of-ratios reported wiener_hqs_vst's scratch relative DRR
+    as 1.570; ratio-of-means on the IDENTICAL data gives 1.38
+    (0.867/0.629) - not a rounding difference, a materially different
+    number computed from the same measurements. drr_study.py's
+    summarise()/verdict()/make_figures() and train_pcim.py's evaluate()
+    both implement ratio-of-means as the only reported aggregation - do
+    not reintroduce mean-of-ratios in a new caller.
     """
     if not np.isfinite(drr_identity) or abs(drr_identity) <= EPS:
         return float("nan")

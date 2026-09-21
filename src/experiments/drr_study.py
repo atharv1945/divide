@@ -39,7 +39,7 @@ from src.dbde.estimator import estimate
 from src.experiments.eval_grid import CsvAppender
 from src.metrics.core import (
     defect_retention_ratio, defect_residual_correlation, anomaly_contrast_gain,
-    degradation_removal_ratio, relative_drr, psnr, ssim,
+    degradation_removal_ratio, psnr, ssim,
 )
 from src.models.restorers import get_restorer, available_restorers
 from src.utils.paths import dtd_root, figures_dir, results_dir
@@ -175,18 +175,31 @@ def run(categories: list[str], restorers: list[str], families: list[str],
     return csv_path
 
 
-def add_relative_drr(df: pd.DataFrame) -> pd.DataFrame:
-    """Normalise against the identity baseline per (image, family,
-    severity): raw DRR includes attenuation caused by the degradation
-    itself, which no restorer is responsible for. See metrics.relative_drr.
-    Split out of run() so it applies uniformly whether the CSV was just
-    written or read back from a previous/resumed run.
+_EPS = 1e-8
 
-    ROW_FIELDS (what run() writes) deliberately excludes drr_identity/
-    drr_rel - they're derived, not raw per-cell data - but a CSV from
-    before that split (or a second call on an already-processed frame)
-    can still carry them; drop first so this is idempotent rather than
-    raising a pandas join-collision on the stale columns."""
+
+def add_relative_drr(df: pd.DataFrame) -> pd.DataFrame:
+    """Joins the matching identity-restorer's raw drr onto each row as
+    drr_identity, keyed on (image, family, severity) - the raw ingredient
+    every ratio-of-means aggregation below needs. Split out of run() so it
+    applies uniformly whether the CSV was just written or read back from a
+    previous/resumed run.
+
+    Deliberately does NOT compute a per-row relative-DRR ratio column
+    anymore (an earlier version did, called it drr_rel, and every
+    aggregate that averaged it was silently computing mean-of-ratios - see
+    relative_drr's docstring in metrics/core.py for why that's wrong and
+    the concrete number it changed on this project's own data). Every
+    consumer below (summarise, verdict, make_figures) computes ratio-of-
+    means itself from drr/drr_identity, at whatever grouping it needs -
+    there is no single per-row column that would be correct for all of
+    them.
+
+    ROW_FIELDS (what run() writes) deliberately excludes drr_identity -
+    it's derived, not raw per-cell data - but a CSV from before this
+    function existed, or a second call on an already-processed frame, can
+    still carry stale drr_identity/drr_rel columns; drop first so this is
+    idempotent rather than raising a pandas join-collision on them."""
     if df.empty:
         return df
     df = df.drop(columns=["drr_identity", "drr_rel"], errors="ignore")
@@ -195,39 +208,80 @@ def add_relative_drr(df: pd.DataFrame) -> pd.DataFrame:
             .set_index(key).drr.rename("drr_identity"))
     if not base.empty:
         df = df.join(base, on=key)
-        df["drr_rel"] = [relative_drr(a, b)
-                         for a, b in zip(df.drr, df.drr_identity)]
     else:
         df["drr_identity"] = np.nan
-        df["drr_rel"] = np.nan
     return df
 
 
+def _ratio_of_means(df: pd.DataFrame) -> float:
+    """Relative DRR for a GROUP of rows carrying drr/drr_identity columns
+    (see add_relative_drr) - mean(drr)/mean(drr_identity) over the group,
+    NOT mean(drr/drr_identity) per row. This project's one aggregation
+    rule for relative DRR - see relative_drr's docstring in
+    metrics/core.py."""
+    if df.empty:
+        return float("nan")
+    den = float(df["drr_identity"].mean())
+    if not np.isfinite(den) or abs(den) <= _EPS:
+        return float("nan")
+    return float(df["drr"].mean() / den)
+
+
+def _ratio_of_means_by(df: pd.DataFrame, cols: list[str]) -> pd.Series:
+    """_ratio_of_means, grouped by `cols` - e.g. ["anomaly_kind"] or
+    ["severity"]. Returns a Series indexed by the group key(s) (a
+    MultiIndex if len(cols) > 1, e.g. for a restorer x kind pivot via
+    .unstack()). Normalises pandas' single-column groupby key (a length-1
+    tuple on some pandas versions, a bare scalar on others) to a bare
+    scalar either way, so callers get a consistent, plottable Series
+    regardless of version."""
+    out = {}
+    for key, g in df.groupby(cols):
+        if isinstance(key, tuple) and len(key) == 1:
+            key = key[0]
+        out[key] = _ratio_of_means(g)
+    return pd.Series(out)
+
+
 def summarise(df: pd.DataFrame) -> pd.DataFrame:
-    g = df.groupby("restorer").agg(
-        drr_mean=("drr", "mean"),
-        drr_rel_mean=("drr_rel", "mean"),
-        drr_rel_median=("drr_rel", "median"),
-        drr_rel_p10=("drr_rel", lambda s: s.quantile(0.10)),
-        residual_corr_mean=("residual_corr", "mean"),
-        acg_mean=("acg", "mean"),
-        dremr_mean=("dremr", "mean"),
-        psnr_normal=("psnr_normal", "mean"),
-        n=("drr", "size"),
-    ).sort_values("drr_rel_mean")
-    return g
+    """Aggregate per restorer. drr_rel_mean is RATIO-OF-MEANS (see
+    _ratio_of_means) - the median/p10-of-per-example-ratios columns an
+    earlier version of this function reported are gone, not silently
+    changed: there is no ratio-of-means analogue of a per-example
+    percentile, and keeping mean-of-ratios for just those two columns
+    while fixing the mean would reintroduce the exact inconsistency this
+    was rewritten to remove."""
+    rows = []
+    for restorer, g in df.groupby("restorer"):
+        rows.append(dict(
+            restorer=restorer,
+            drr_mean=float(g.drr.mean()),
+            drr_rel_mean=_ratio_of_means(g),
+            residual_corr_mean=(float(g.residual_corr.mean())
+                                if "residual_corr" in g and g.residual_corr.notna().any()
+                                else float("nan")),
+            acg_mean=float(g.acg.mean()),
+            dremr_mean=float(g.dremr.mean()),
+            psnr_normal=float(g.psnr_normal.mean()),
+            n=len(g),
+        ))
+    return pd.DataFrame(rows).set_index("restorer").sort_values("drr_rel_mean")
 
 
 def verdict(df: pd.DataFrame) -> tuple[str, str]:
     non_id = df[df.restorer != "identity"]
     if non_id.empty:
         return "INCONCLUSIVE", "no non-identity restorers ran"
-    # Judge on RELATIVE DRR: the share of defect signal the restorer removed,
-    # excluding what the degradation had already destroyed.
-    col = "drr_rel" if non_id.drr_rel.notna().any() else "drr"
-    m = float(non_id[col].mean())
+    # Judge on RELATIVE DRR (ratio-of-means): the share of defect signal
+    # the restorer removed, excluding what the degradation had already
+    # destroyed. Falls back to raw drr's own mean only if no identity
+    # baseline was present in this data at all (e.g. a restorer list run
+    # without "identity" in it).
+    m = _ratio_of_means(non_id)
+    if not np.isfinite(m):
+        m = float(non_id.drr.mean())
     scratch = non_id[non_id.anomaly_kind == "scratch"]
-    ms = float(scratch[col].mean()) if not scratch.empty else float("nan")
+    ms = _ratio_of_means(scratch) if not scratch.empty else float("nan")
 
     if m < 0.5:
         v = "GO"
@@ -247,11 +301,20 @@ def verdict(df: pd.DataFrame) -> tuple[str, str]:
     return v, why
 
 
-def make_figures(df: pd.DataFrame, out: Path) -> list[Path]:
+def make_figures(df: pd.DataFrame, out: Path, tag: str | None = None) -> list[Path]:
+    """Writes drr_frontier/drr_vs_severity/drr_by_kind, filenames suffixed
+    with `_{tag}` when given. Every call used to write the exact same
+    three filenames regardless of which study produced them - the last
+    study run (including scripts/smoke.sh's synthetic ones) silently
+    overwrote whatever real-data figures a previous run had committed,
+    a recurring problem documented in several commits this session.
+    Passing a tag makes each study's figures a distinct, non-clobbering
+    file; omit it only for throwaway/manual invocations."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
+    suffix = f"_{tag}" if tag else ""
     paths = []
     d = df[df.restorer != "identity"]
     if d.empty:
@@ -260,7 +323,7 @@ def make_figures(df: pd.DataFrame, out: Path) -> list[Path]:
     # --- the money figure: preservation-fidelity frontier ---
     fig, ax = plt.subplots(figsize=(7.2, 5.2), dpi=150)
     for name, sub in d.groupby("restorer"):
-        ax.scatter(sub.psnr_normal.mean(), sub.drr_rel.mean(), s=90, label=name,
+        ax.scatter(sub.psnr_normal.mean(), _ratio_of_means(sub), s=90, label=name,
                    edgecolor="black", linewidth=0.6, zorder=3)
     ax.axhline(1.0, ls="--", c="green", lw=1.2, alpha=0.7)
     ax.text(ax.get_xlim()[0], 1.005, " perfect defect preservation",
@@ -272,33 +335,32 @@ def make_figures(df: pd.DataFrame, out: Path) -> list[Path]:
     ax.grid(alpha=0.25)
     ax.legend(fontsize=8, loc="best")
     fig.tight_layout()
-    p = out / "drr_frontier.png"
+    p = out / f"drr_frontier{suffix}.png"
     fig.savefig(p); plt.close(fig); paths.append(p)
 
     # --- DRR vs severity ---
     fig, ax = plt.subplots(figsize=(7.2, 4.6), dpi=150)
     for name, sub in d.groupby("restorer"):
-        s = sub.groupby("severity").drr_rel.mean()
+        s = _ratio_of_means_by(sub, ["severity"]).sort_index()
         ax.plot(s.index, s.values, marker="o", label=name)
     ax.axhline(0.5, ls=":", c="red", lw=1.0)
     ax.set_xlabel("degradation severity"); ax.set_ylabel("mean relative DRR")
     ax.set_title("Defect retention degrades with severity")
     ax.grid(alpha=0.25); ax.legend(fontsize=8)
     fig.tight_layout()
-    p = out / "drr_vs_severity.png"
+    p = out / f"drr_vs_severity{suffix}.png"
     fig.savefig(p); plt.close(fig); paths.append(p)
 
     # --- DRR by anomaly kind ---
     if d.anomaly_kind.nunique() > 1:
         fig, ax = plt.subplots(figsize=(7.2, 4.6), dpi=150)
-        piv = d.pivot_table(index="restorer", columns="anomaly_kind",
-                            values="drr_rel", aggfunc="mean")
+        piv = _ratio_of_means_by(d, ["restorer", "anomaly_kind"]).unstack()
         piv.plot.bar(ax=ax, rot=20)
         ax.axhline(0.5, ls=":", c="red", lw=1.0)
         ax.set_ylabel("mean DRR"); ax.set_title("Defect retention by anomaly type")
         ax.grid(alpha=0.25, axis="y")
         fig.tight_layout()
-        p = out / "drr_by_kind.png"
+        p = out / f"drr_by_kind{suffix}.png"
         fig.savefig(p); plt.close(fig); paths.append(p)
 
     return paths
@@ -359,15 +421,16 @@ def main() -> int:
     print("\n" + "=" * 74)
     print("DEFECT RETENTION BY RESTORER")
     print("drr_rel: 1.0 = restorer preserved the defect, 0.0 = erased it")
-    print("(raw drr also counts attenuation caused by the degradation itself)")
+    print("(ratio-of-means: mean(drr)/mean(drr_identity) for the group - see")
+    print(" relative_drr's docstring in metrics/core.py. raw drr also counts")
+    print(" attenuation caused by the degradation itself.)")
     print("=" * 74)
     print(summary.round(3).to_string())
 
     if df.anomaly_kind.nunique() > 1:
         print("\nBY ANOMALY TYPE")
-        print(df[df.restorer != "identity"]
-              .pivot_table(index="restorer", columns="anomaly_kind",
-                           values="drr_rel", aggfunc="mean").round(3).to_string())
+        print(_ratio_of_means_by(df[df.restorer != "identity"],
+                                 ["restorer", "anomaly_kind"]).unstack().round(3).to_string())
 
     v, why = verdict(df)
     print("\n" + "=" * 74)
@@ -375,16 +438,17 @@ def main() -> int:
     print("=" * 74)
     print(why)
 
-    paths = make_figures(df, figs)
+    paths = make_figures(df, figs, tag=args.tag)
     print(f"\nrows      : {len(df)}")
     print(f"csv       : {csv}")
     for p in paths:
         print(f"figure    : {p}")
 
+    non_id = df[df.restorer != "identity"]
     (res / f"{args.tag}_verdict.json").write_text(json.dumps(
         dict(verdict=v, reason=why, n_rows=len(df),
-             mean_drr=float(df[df.restorer != 'identity'].drr.mean()),
-             mean_drr_rel=float(df[df.restorer != 'identity'].drr_rel.mean())), indent=2))
+             mean_drr=float(non_id.drr.mean()),
+             mean_drr_rel=_ratio_of_means(non_id)), indent=2))
     return 0
 
 

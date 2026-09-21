@@ -51,8 +51,7 @@ from src.experiments.train_pcim import (
     load_data_pools,
 )
 from src.metrics.core import (
-    defect_retention_ratio, degradation_magnitude, degradation_removal_ratio,
-    psnr, relative_drr,
+    defect_retention_ratio, degradation_magnitude, degradation_removal_ratio, psnr,
 )
 from src.models.pcim import PCIM
 from src.utils.paths import dtd_root, load_config
@@ -99,7 +98,6 @@ def per_example_eval(model: PCIM, eval_set, device: str) -> list[dict]:
 
         drr_id = defect_retention_ratio(ex.y_a, ex.y_0, ex.x_a, ex.x0, ex.mask)
         drr_method = defect_retention_ratio(r_a, r_0, ex.x_a, ex.x0, ex.mask)
-        rel = relative_drr(drr_method, drr_id)
 
         den = degradation_magnitude(ex.y_a, ex.x_a, ex.mask)
         dremr = degradation_removal_ratio(r_a, ex.y_a, ex.x_a, ex.mask)
@@ -122,7 +120,11 @@ def per_example_eval(model: PCIM, eval_set, device: str) -> list[dict]:
                          dremr=dremr, psnr=p,
                          dremr_cons=dremr_cons, psnr_cons=psnr_cons,
                          dremr_deg=dremr_deg, psnr_deg=psnr_deg,
-                         relative_drr=rel,
+                         # raw ingredients for ratio-of-means relative DRR,
+                         # not a per-example ratio - see relative_drr's
+                         # docstring in metrics/core.py and summarize()
+                         # below, which is the only place these combine.
+                         drr_method=drr_method, drr_id=drr_id,
                          blur_kind=est.blur_kind, kernel_size=kernel_size,
                          wiener_ran=wiener_ran))
     return rows
@@ -200,10 +202,24 @@ def summarize(rows: list[dict]) -> dict:
         cons_psnr_mean=_agg("psnr_cons")[0], cons_psnr_std=_agg("psnr_cons")[1],
     )
     for kind in ANOMALY_KINDS:
-        vals = [r["relative_drr"] for r in rows
-               if r["kind"] == kind and np.isfinite(r["relative_drr"])]
-        out[f"relative_drr_{kind}"] = float(np.mean(vals)) if vals else float("nan")
+        kind_rows = [r for r in rows if r["kind"] == kind
+                    and np.isfinite(r["drr_method"]) and np.isfinite(r["drr_id"])]
+        out[f"relative_drr_{kind}"] = _ratio_of_means_rows(kind_rows)
     return out
+
+
+def _ratio_of_means_rows(rows: list[dict]) -> float:
+    """Ratio-of-means relative DRR over a list of per-example row dicts
+    (drr_method/drr_id) - see relative_drr's docstring in metrics/core.py.
+    Never average a per-example ratio; this is the one aggregation this
+    module uses."""
+    finite = [r for r in rows if np.isfinite(r["drr_method"]) and np.isfinite(r["drr_id"])]
+    if not finite:
+        return float("nan")
+    den = float(np.mean([r["drr_id"] for r in finite]))
+    if not np.isfinite(den) or abs(den) <= 1e-8:
+        return float("nan")
+    return float(np.mean([r["drr_method"] for r in finite]) / den)
 
 
 def ratio_instability_check(rows: list[dict]) -> dict:

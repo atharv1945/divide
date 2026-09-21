@@ -1,7 +1,7 @@
 {
   "verdict": "MARGINAL",
-  "reason": "mean DRR 0.721 is in the ambiguous band. Inspect the per-restorer and per-kind tables before committing.  Scratch-only mean DRR: 0.637 (the case that matters most).",
+  "reason": "mean DRR 0.721 is in the ambiguous band. Inspect the per-restorer and per-kind tables before committing.  Scratch-only mean DRR: 0.607 (the case that matters most).",
   "n_rows": 900,
   "mean_drr": 0.5773612507334392,
-  "mean_drr_rel": 0.7214788051030924
+  "mean_drr_rel": 0.7207305027181495
 }

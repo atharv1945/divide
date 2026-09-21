@@ -25,7 +25,7 @@ import pandas as pd
 
 from src.data.mvtec import DEFAULT_CATEGORIES, dataset_available
 from src.degrade.anomaly import ANOMALY_KINDS
-from src.experiments.drr_study import add_relative_drr, run
+from src.experiments.drr_study import _ratio_of_means, add_relative_drr, run
 from src.models.restorers import CLASSICAL, wiener_deconv
 from src.utils.paths import figures_dir, results_dir
 
@@ -67,8 +67,8 @@ def main() -> int:
         scratch = sub[sub.anomaly_kind == "scratch"]
         rows.append(dict(
             nsr=nsr,
-            drr_rel_mean=float(sub.drr_rel.mean()),
-            drr_rel_scratch=float(scratch.drr_rel.mean()) if not scratch.empty else float("nan"),
+            drr_rel_mean=_ratio_of_means(sub),
+            drr_rel_scratch=_ratio_of_means(scratch) if not scratch.empty else float("nan"),
             residual_corr_scratch=float(scratch.residual_corr.mean()) if not scratch.empty else float("nan"),
             dremr_mean=float(sub.dremr.mean()),
             psnr_normal=float(sub.psnr_normal.mean()),
