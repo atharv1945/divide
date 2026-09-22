@@ -2,7 +2,7 @@
   "detector": "patchcore",
   "detector_choice_note": "This demo's heatmaps use PatchCore, not PaDiM. Step 3's bootstrap-CI grid (FINDINGS.md Sec. 3.2) found DIVIDE's detection benefit is established on PatchCore (95% CI excludes zero, positive) but reverses on PaDiM (established negative) - both at n_train=16, the same data-scarce regime this demo's detector is fit in. PatchCore is shown here because it is where the benefit is established, not because PaDiM was hidden: PaDiM's behavior in this regime is the opposite, and untested at published training scale for either detector.",
   "score_note": "'score' is PatchCore's own calibrated image-level anomaly score - and it reads exactly 1.000 for every panel of every example here. That is real, not a bug: MinMax calibration is fit on only 16 normal training images (the same data-scarce regime as the note above), so its headroom is narrow, and every example in this demo carries an obvious pasted synthetic defect that saturates past it. 'mean anomaly' (the anomaly map's raw pixel-average, before that calibration clips it) is shown alongside it because it still varies meaningfully between panels and is what the heatmap actually shows.",
-  "striking_case_note": "Look closely at the mark itself, not just whether one is visible: Wiener's panel still shows a pale line at roughly the scratch's location (deconvolution rings near edges - a well-known classical artifact - so SOMETHING persists there even when the real signal is gone), but its residual correlation with the true scratch is 0.008 - essentially uncorrelated, i.e. that mark is not reliably the scratch anymore. DIVIDE's mark has correlation 0.883 - it is the scratch. The two panels can look deceptively similar side by side; that gap is exactly why this project measures the residual against a true counterfactual instead of trusting a single image by eye - see FINDINGS.md Sec. 1 for the same point made about DRR generally.",
+  "striking_case_note": "The restored images AND the residual maps look deceptively similar - Wiener's ringing artifact concentrates right at the scratch's edge, reaching almost the same peak magnitude as the true residual, so a glance at either row can't tell the difference here. The profile plot above can: it's a slice perpendicular to the scratch, true residual vs. every panel's, on one axis with a zero line. True and DIVIDE both show a single clean bump centred at distance 0. Wiener shows no clean peak at the centre at all - its energy is smeared into broad ringing lobes on EITHER SIDE of the true location. The sign-agreement maps below show the same thing pixel by pixel: within the 524-pixel mask, the true residual is uniformly positive (+0.075 to +0.300) while Wiener's flips sign pixel to pixel (-0.034 to +0.296) - green where a panel's sign matches true's, red where it flips. Wiener isn't erasing the defect's energy - it's replacing its structure with ringing at the same location. See FINDINGS.md Sec. 1 for the corrected claim and the full evidence.",
   "panel_order": [
     "degraded",
     "wiener",
@@ -26,37 +26,56 @@
       "panels": {
         "degraded": {
           "image": "images\\bottle_scratch_defocus_sev2_degraded.png",
+          "image_zoom": "images\\bottle_scratch_defocus_sev2_degraded_zoom.png",
           "heatmap": "images\\bottle_scratch_defocus_sev2_degraded_heat.png",
+          "residual": "images\\bottle_scratch_defocus_sev2_degraded_residual.png",
+          "residual_zoom": "images\\bottle_scratch_defocus_sev2_degraded_residual_zoom.png",
+          "sign_agreement": "images\\bottle_scratch_defocus_sev2_degraded_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.4547235667705536,
+          "mean_anomaly": 0.5206311345100403,
           "relative_drr": 1.0,
           "residual_corr": 0.7986393747844335
         },
         "wiener": {
           "image": "images\\bottle_scratch_defocus_sev2_wiener.png",
+          "image_zoom": "images\\bottle_scratch_defocus_sev2_wiener_zoom.png",
           "heatmap": "images\\bottle_scratch_defocus_sev2_wiener_heat.png",
+          "residual": "images\\bottle_scratch_defocus_sev2_wiener_residual.png",
+          "residual_zoom": "images\\bottle_scratch_defocus_sev2_wiener_residual_zoom.png",
+          "sign_agreement": "images\\bottle_scratch_defocus_sev2_wiener_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.39692550897598267,
+          "mean_anomaly": 0.4690825939178467,
           "relative_drr": 0.11167787024328604,
           "residual_corr": 0.02008995374825416
         },
         "restormer_deblur": {
           "image": "images\\bottle_scratch_defocus_sev2_restormer_deblur.png",
+          "image_zoom": "images\\bottle_scratch_defocus_sev2_restormer_deblur_zoom.png",
           "heatmap": "images\\bottle_scratch_defocus_sev2_restormer_deblur_heat.png",
+          "residual": "images\\bottle_scratch_defocus_sev2_restormer_deblur_residual.png",
+          "residual_zoom": "images\\bottle_scratch_defocus_sev2_restormer_deblur_residual_zoom.png",
+          "sign_agreement": "images\\bottle_scratch_defocus_sev2_restormer_deblur_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.46476832032203674,
+          "mean_anomaly": 0.5332789421081543,
           "relative_drr": 1.0783620686385378,
           "residual_corr": 0.8339396586643198
         },
         "divide": {
           "image": "images\\bottle_scratch_defocus_sev2_divide.png",
+          "image_zoom": "images\\bottle_scratch_defocus_sev2_divide_zoom.png",
           "heatmap": "images\\bottle_scratch_defocus_sev2_divide_heat.png",
+          "residual": "images\\bottle_scratch_defocus_sev2_divide_residual.png",
+          "residual_zoom": "images\\bottle_scratch_defocus_sev2_divide_residual_zoom.png",
+          "sign_agreement": "images\\bottle_scratch_defocus_sev2_divide_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.26714810729026794,
+          "mean_anomaly": 0.3408304452896118,
           "relative_drr": 1.1241893896743633,
           "residual_corr": 0.9681472888920577
         }
-      }
+      },
+      "true_residual": "images\\bottle_scratch_defocus_sev2_true_residual.png",
+      "true_residual_zoom": "images\\bottle_scratch_defocus_sev2_true_residual_zoom.png",
+      "profile": "images\\bottle_scratch_defocus_sev2_profile.png"
     },
     {
       "id": "bottle_scratch_defocus_sev3",
@@ -67,37 +86,56 @@
       "panels": {
         "degraded": {
           "image": "images\\bottle_scratch_defocus_sev3_degraded.png",
+          "image_zoom": "images\\bottle_scratch_defocus_sev3_degraded_zoom.png",
           "heatmap": "images\\bottle_scratch_defocus_sev3_degraded_heat.png",
+          "residual": "images\\bottle_scratch_defocus_sev3_degraded_residual.png",
+          "residual_zoom": "images\\bottle_scratch_defocus_sev3_degraded_residual_zoom.png",
+          "sign_agreement": "images\\bottle_scratch_defocus_sev3_degraded_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.5907098054885864,
+          "mean_anomaly": 0.6503337025642395,
           "relative_drr": 1.0,
           "residual_corr": 0.7295368309330305
         },
         "wiener": {
           "image": "images\\bottle_scratch_defocus_sev3_wiener.png",
+          "image_zoom": "images\\bottle_scratch_defocus_sev3_wiener_zoom.png",
           "heatmap": "images\\bottle_scratch_defocus_sev3_wiener_heat.png",
+          "residual": "images\\bottle_scratch_defocus_sev3_wiener_residual.png",
+          "residual_zoom": "images\\bottle_scratch_defocus_sev3_wiener_residual_zoom.png",
+          "sign_agreement": "images\\bottle_scratch_defocus_sev3_wiener_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.49750033020973206,
+          "mean_anomaly": 0.5648177862167358,
           "relative_drr": 0.10823020850209676,
           "residual_corr": 0.015655114082532097
         },
         "restormer_deblur": {
           "image": "images\\bottle_scratch_defocus_sev3_restormer_deblur.png",
+          "image_zoom": "images\\bottle_scratch_defocus_sev3_restormer_deblur_zoom.png",
           "heatmap": "images\\bottle_scratch_defocus_sev3_restormer_deblur_heat.png",
+          "residual": "images\\bottle_scratch_defocus_sev3_restormer_deblur_residual.png",
+          "residual_zoom": "images\\bottle_scratch_defocus_sev3_restormer_deblur_residual_zoom.png",
+          "sign_agreement": "images\\bottle_scratch_defocus_sev3_restormer_deblur_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.548120379447937,
+          "mean_anomaly": 0.6123949289321899,
           "relative_drr": 1.1511981019027842,
           "residual_corr": 0.7944556885012891
         },
         "divide": {
           "image": "images\\bottle_scratch_defocus_sev3_divide.png",
+          "image_zoom": "images\\bottle_scratch_defocus_sev3_divide_zoom.png",
           "heatmap": "images\\bottle_scratch_defocus_sev3_divide_heat.png",
+          "residual": "images\\bottle_scratch_defocus_sev3_divide_residual.png",
+          "residual_zoom": "images\\bottle_scratch_defocus_sev3_divide_residual_zoom.png",
+          "sign_agreement": "images\\bottle_scratch_defocus_sev3_divide_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.35942524671554565,
+          "mean_anomaly": 0.43155184388160706,
           "relative_drr": 1.214402096793658,
           "residual_corr": 0.9327201674022524
         }
-      }
+      },
+      "true_residual": "images\\bottle_scratch_defocus_sev3_true_residual.png",
+      "true_residual_zoom": "images\\bottle_scratch_defocus_sev3_true_residual_zoom.png",
+      "profile": "images\\bottle_scratch_defocus_sev3_profile.png"
     },
     {
       "id": "bottle_scratch_defocus_sev4",
@@ -108,37 +146,56 @@
       "panels": {
         "degraded": {
           "image": "images\\bottle_scratch_defocus_sev4_degraded.png",
+          "image_zoom": "images\\bottle_scratch_defocus_sev4_degraded_zoom.png",
           "heatmap": "images\\bottle_scratch_defocus_sev4_degraded_heat.png",
+          "residual": "images\\bottle_scratch_defocus_sev4_degraded_residual.png",
+          "residual_zoom": "images\\bottle_scratch_defocus_sev4_degraded_residual_zoom.png",
+          "sign_agreement": "images\\bottle_scratch_defocus_sev4_degraded_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.7126634120941162,
+          "mean_anomaly": 0.7617886662483215,
           "relative_drr": 1.0,
           "residual_corr": 0.6965704001826162
         },
         "wiener": {
           "image": "images\\bottle_scratch_defocus_sev4_wiener.png",
+          "image_zoom": "images\\bottle_scratch_defocus_sev4_wiener_zoom.png",
           "heatmap": "images\\bottle_scratch_defocus_sev4_wiener_heat.png",
+          "residual": "images\\bottle_scratch_defocus_sev4_wiener_residual.png",
+          "residual_zoom": "images\\bottle_scratch_defocus_sev4_wiener_residual_zoom.png",
+          "sign_agreement": "images\\bottle_scratch_defocus_sev4_wiener_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.7081680297851562,
+          "mean_anomaly": 0.7628872990608215,
           "relative_drr": 0.14646569916455088,
           "residual_corr": 0.007862834991737077
         },
         "restormer_deblur": {
           "image": "images\\bottle_scratch_defocus_sev4_restormer_deblur.png",
+          "image_zoom": "images\\bottle_scratch_defocus_sev4_restormer_deblur_zoom.png",
           "heatmap": "images\\bottle_scratch_defocus_sev4_restormer_deblur_heat.png",
+          "residual": "images\\bottle_scratch_defocus_sev4_restormer_deblur_residual.png",
+          "residual_zoom": "images\\bottle_scratch_defocus_sev4_restormer_deblur_residual_zoom.png",
+          "sign_agreement": "images\\bottle_scratch_defocus_sev4_restormer_deblur_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.6051012873649597,
+          "mean_anomaly": 0.6674702763557434,
           "relative_drr": 1.3253047834554266,
           "residual_corr": 0.7842756043728145
         },
         "divide": {
           "image": "images\\bottle_scratch_defocus_sev4_divide.png",
+          "image_zoom": "images\\bottle_scratch_defocus_sev4_divide_zoom.png",
           "heatmap": "images\\bottle_scratch_defocus_sev4_divide_heat.png",
+          "residual": "images\\bottle_scratch_defocus_sev4_divide_residual.png",
+          "residual_zoom": "images\\bottle_scratch_defocus_sev4_divide_residual_zoom.png",
+          "sign_agreement": "images\\bottle_scratch_defocus_sev4_divide_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.6197823286056519,
+          "mean_anomaly": 0.6761549711227417,
           "relative_drr": 1.379821624015309,
           "residual_corr": 0.8828067529915425
         }
-      }
+      },
+      "true_residual": "images\\bottle_scratch_defocus_sev4_true_residual.png",
+      "true_residual_zoom": "images\\bottle_scratch_defocus_sev4_true_residual_zoom.png",
+      "profile": "images\\bottle_scratch_defocus_sev4_profile.png"
     },
     {
       "id": "carpet_scratch_motion_sev2",
@@ -149,37 +206,56 @@
       "panels": {
         "degraded": {
           "image": "images\\carpet_scratch_motion_sev2_degraded.png",
+          "image_zoom": "images\\carpet_scratch_motion_sev2_degraded_zoom.png",
           "heatmap": "images\\carpet_scratch_motion_sev2_degraded_heat.png",
+          "residual": "images\\carpet_scratch_motion_sev2_degraded_residual.png",
+          "residual_zoom": "images\\carpet_scratch_motion_sev2_degraded_residual_zoom.png",
+          "sign_agreement": "images\\carpet_scratch_motion_sev2_degraded_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.9932267665863037,
+          "mean_anomaly": 0.9938892126083374,
           "relative_drr": 1.0,
           "residual_corr": 0.7419825818948262
         },
         "wiener": {
           "image": "images\\carpet_scratch_motion_sev2_wiener.png",
+          "image_zoom": "images\\carpet_scratch_motion_sev2_wiener_zoom.png",
           "heatmap": "images\\carpet_scratch_motion_sev2_wiener_heat.png",
+          "residual": "images\\carpet_scratch_motion_sev2_wiener_residual.png",
+          "residual_zoom": "images\\carpet_scratch_motion_sev2_wiener_residual_zoom.png",
+          "sign_agreement": "images\\carpet_scratch_motion_sev2_wiener_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.9078185558319092,
+          "mean_anomaly": 0.9152258634567261,
           "relative_drr": 0.004927961684459037,
           "residual_corr": -0.04541217652615814
         },
         "restormer_deblur": {
           "image": "images\\carpet_scratch_motion_sev2_restormer_deblur.png",
+          "image_zoom": "images\\carpet_scratch_motion_sev2_restormer_deblur_zoom.png",
           "heatmap": "images\\carpet_scratch_motion_sev2_restormer_deblur_heat.png",
+          "residual": "images\\carpet_scratch_motion_sev2_restormer_deblur_residual.png",
+          "residual_zoom": "images\\carpet_scratch_motion_sev2_restormer_deblur_residual_zoom.png",
+          "sign_agreement": "images\\carpet_scratch_motion_sev2_restormer_deblur_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.9480909109115601,
+          "mean_anomaly": 0.9506783485412598,
           "relative_drr": 1.017966499462798,
           "residual_corr": 0.7667209844474343
         },
         "divide": {
           "image": "images\\carpet_scratch_motion_sev2_divide.png",
+          "image_zoom": "images\\carpet_scratch_motion_sev2_divide_zoom.png",
           "heatmap": "images\\carpet_scratch_motion_sev2_divide_heat.png",
+          "residual": "images\\carpet_scratch_motion_sev2_divide_residual.png",
+          "residual_zoom": "images\\carpet_scratch_motion_sev2_divide_residual_zoom.png",
+          "sign_agreement": "images\\carpet_scratch_motion_sev2_divide_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.7759333252906799,
+          "mean_anomaly": 0.7784661054611206,
           "relative_drr": 1.0540375022674113,
           "residual_corr": 0.8733586247386914
         }
-      }
+      },
+      "true_residual": "images\\carpet_scratch_motion_sev2_true_residual.png",
+      "true_residual_zoom": "images\\carpet_scratch_motion_sev2_true_residual_zoom.png",
+      "profile": "images\\carpet_scratch_motion_sev2_profile.png"
     },
     {
       "id": "carpet_scratch_motion_sev3",
@@ -190,37 +266,56 @@
       "panels": {
         "degraded": {
           "image": "images\\carpet_scratch_motion_sev3_degraded.png",
+          "image_zoom": "images\\carpet_scratch_motion_sev3_degraded_zoom.png",
           "heatmap": "images\\carpet_scratch_motion_sev3_degraded_heat.png",
+          "residual": "images\\carpet_scratch_motion_sev3_degraded_residual.png",
+          "residual_zoom": "images\\carpet_scratch_motion_sev3_degraded_residual_zoom.png",
+          "sign_agreement": "images\\carpet_scratch_motion_sev3_degraded_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.9966917037963867,
+          "mean_anomaly": 0.9966115951538086,
           "relative_drr": 1.0,
           "residual_corr": 0.6590754067497592
         },
         "wiener": {
           "image": "images\\carpet_scratch_motion_sev3_wiener.png",
+          "image_zoom": "images\\carpet_scratch_motion_sev3_wiener_zoom.png",
           "heatmap": "images\\carpet_scratch_motion_sev3_wiener_heat.png",
+          "residual": "images\\carpet_scratch_motion_sev3_wiener_residual.png",
+          "residual_zoom": "images\\carpet_scratch_motion_sev3_wiener_residual_zoom.png",
+          "sign_agreement": "images\\carpet_scratch_motion_sev3_wiener_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.7259522080421448,
+          "mean_anomaly": 0.7370094060897827,
           "relative_drr": 0.0008234065548411654,
           "residual_corr": 0.009862671726385448
         },
         "restormer_deblur": {
           "image": "images\\carpet_scratch_motion_sev3_restormer_deblur.png",
+          "image_zoom": "images\\carpet_scratch_motion_sev3_restormer_deblur_zoom.png",
           "heatmap": "images\\carpet_scratch_motion_sev3_restormer_deblur_heat.png",
+          "residual": "images\\carpet_scratch_motion_sev3_restormer_deblur_residual.png",
+          "residual_zoom": "images\\carpet_scratch_motion_sev3_restormer_deblur_residual_zoom.png",
+          "sign_agreement": "images\\carpet_scratch_motion_sev3_restormer_deblur_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.9399661421775818,
+          "mean_anomaly": 0.9436423778533936,
           "relative_drr": 1.0502389059699937,
           "residual_corr": 0.6466371682787337
         },
         "divide": {
           "image": "images\\carpet_scratch_motion_sev3_divide.png",
+          "image_zoom": "images\\carpet_scratch_motion_sev3_divide_zoom.png",
           "heatmap": "images\\carpet_scratch_motion_sev3_divide_heat.png",
+          "residual": "images\\carpet_scratch_motion_sev3_divide_residual.png",
+          "residual_zoom": "images\\carpet_scratch_motion_sev3_divide_residual_zoom.png",
+          "sign_agreement": "images\\carpet_scratch_motion_sev3_divide_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.6744433641433716,
+          "mean_anomaly": 0.6851066946983337,
           "relative_drr": 1.0588065389485253,
           "residual_corr": 0.8656007807631565
         }
-      }
+      },
+      "true_residual": "images\\carpet_scratch_motion_sev3_true_residual.png",
+      "true_residual_zoom": "images\\carpet_scratch_motion_sev3_true_residual_zoom.png",
+      "profile": "images\\carpet_scratch_motion_sev3_profile.png"
     },
     {
       "id": "carpet_scratch_motion_sev4",
@@ -231,37 +326,56 @@
       "panels": {
         "degraded": {
           "image": "images\\carpet_scratch_motion_sev4_degraded.png",
+          "image_zoom": "images\\carpet_scratch_motion_sev4_degraded_zoom.png",
           "heatmap": "images\\carpet_scratch_motion_sev4_degraded_heat.png",
+          "residual": "images\\carpet_scratch_motion_sev4_degraded_residual.png",
+          "residual_zoom": "images\\carpet_scratch_motion_sev4_degraded_residual_zoom.png",
+          "sign_agreement": "images\\carpet_scratch_motion_sev4_degraded_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.9999074935913086,
+          "mean_anomaly": 0.9998726844787598,
           "relative_drr": 1.0,
           "residual_corr": 0.5955964062833714
         },
         "wiener": {
           "image": "images\\carpet_scratch_motion_sev4_wiener.png",
+          "image_zoom": "images\\carpet_scratch_motion_sev4_wiener_zoom.png",
           "heatmap": "images\\carpet_scratch_motion_sev4_wiener_heat.png",
+          "residual": "images\\carpet_scratch_motion_sev4_wiener_residual.png",
+          "residual_zoom": "images\\carpet_scratch_motion_sev4_wiener_residual_zoom.png",
+          "sign_agreement": "images\\carpet_scratch_motion_sev4_wiener_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.999919593334198,
+          "mean_anomaly": 0.9999036192893982,
           "relative_drr": 0.5839189880777124,
           "residual_corr": -0.024296596841863544
         },
         "restormer_deblur": {
           "image": "images\\carpet_scratch_motion_sev4_restormer_deblur.png",
+          "image_zoom": "images\\carpet_scratch_motion_sev4_restormer_deblur_zoom.png",
           "heatmap": "images\\carpet_scratch_motion_sev4_restormer_deblur_heat.png",
+          "residual": "images\\carpet_scratch_motion_sev4_restormer_deblur_residual.png",
+          "residual_zoom": "images\\carpet_scratch_motion_sev4_restormer_deblur_residual_zoom.png",
+          "sign_agreement": "images\\carpet_scratch_motion_sev4_restormer_deblur_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.9999074935913086,
+          "mean_anomaly": 0.9998726844787598,
           "relative_drr": 1.0,
           "residual_corr": 0.5955964062833714
         },
         "divide": {
           "image": "images\\carpet_scratch_motion_sev4_divide.png",
+          "image_zoom": "images\\carpet_scratch_motion_sev4_divide_zoom.png",
           "heatmap": "images\\carpet_scratch_motion_sev4_divide_heat.png",
+          "residual": "images\\carpet_scratch_motion_sev4_divide_residual.png",
+          "residual_zoom": "images\\carpet_scratch_motion_sev4_divide_residual_zoom.png",
+          "sign_agreement": "images\\carpet_scratch_motion_sev4_divide_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.999836802482605,
+          "mean_anomaly": 0.999802827835083,
           "relative_drr": 1.0466461752878862,
           "residual_corr": 0.5923830158287137
         }
-      }
+      },
+      "true_residual": "images\\carpet_scratch_motion_sev4_true_residual.png",
+      "true_residual_zoom": "images\\carpet_scratch_motion_sev4_true_residual_zoom.png",
+      "profile": "images\\carpet_scratch_motion_sev4_profile.png"
     },
     {
       "id": "screw_blob_defocus_sev2",
@@ -272,37 +386,56 @@
       "panels": {
         "degraded": {
           "image": "images\\screw_blob_defocus_sev2_degraded.png",
+          "image_zoom": "images\\screw_blob_defocus_sev2_degraded_zoom.png",
           "heatmap": "images\\screw_blob_defocus_sev2_degraded_heat.png",
+          "residual": "images\\screw_blob_defocus_sev2_degraded_residual.png",
+          "residual_zoom": "images\\screw_blob_defocus_sev2_degraded_residual_zoom.png",
+          "sign_agreement": "images\\screw_blob_defocus_sev2_degraded_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.38544797897338867,
+          "mean_anomaly": 0.3910662531852722,
           "relative_drr": 1.0,
           "residual_corr": 0.9989259541397193
         },
         "wiener": {
           "image": "images\\screw_blob_defocus_sev2_wiener.png",
+          "image_zoom": "images\\screw_blob_defocus_sev2_wiener_zoom.png",
           "heatmap": "images\\screw_blob_defocus_sev2_wiener_heat.png",
+          "residual": "images\\screw_blob_defocus_sev2_wiener_residual.png",
+          "residual_zoom": "images\\screw_blob_defocus_sev2_wiener_residual_zoom.png",
+          "sign_agreement": "images\\screw_blob_defocus_sev2_wiener_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.29548919200897217,
+          "mean_anomaly": 0.30749136209487915,
           "relative_drr": 0.40545020006902177,
           "residual_corr": -0.04450827363025307
         },
         "restormer_deblur": {
           "image": "images\\screw_blob_defocus_sev2_restormer_deblur.png",
+          "image_zoom": "images\\screw_blob_defocus_sev2_restormer_deblur_zoom.png",
           "heatmap": "images\\screw_blob_defocus_sev2_restormer_deblur_heat.png",
+          "residual": "images\\screw_blob_defocus_sev2_restormer_deblur_residual.png",
+          "residual_zoom": "images\\screw_blob_defocus_sev2_restormer_deblur_residual_zoom.png",
+          "sign_agreement": "images\\screw_blob_defocus_sev2_restormer_deblur_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.3556511700153351,
+          "mean_anomaly": 0.3587607145309448,
           "relative_drr": 0.9970696406527868,
           "residual_corr": 0.9888007392010453
         },
         "divide": {
           "image": "images\\screw_blob_defocus_sev2_divide.png",
+          "image_zoom": "images\\screw_blob_defocus_sev2_divide_zoom.png",
           "heatmap": "images\\screw_blob_defocus_sev2_divide_heat.png",
+          "residual": "images\\screw_blob_defocus_sev2_divide_residual.png",
+          "residual_zoom": "images\\screw_blob_defocus_sev2_divide_residual_zoom.png",
+          "sign_agreement": "images\\screw_blob_defocus_sev2_divide_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.20437292754650116,
+          "mean_anomaly": 0.21542611718177795,
           "relative_drr": 1.0171504210054414,
           "residual_corr": 0.9999653468622238
         }
-      }
+      },
+      "true_residual": "images\\screw_blob_defocus_sev2_true_residual.png",
+      "true_residual_zoom": "images\\screw_blob_defocus_sev2_true_residual_zoom.png",
+      "profile": "images\\screw_blob_defocus_sev2_profile.png"
     },
     {
       "id": "screw_blob_defocus_sev3",
@@ -313,37 +446,56 @@
       "panels": {
         "degraded": {
           "image": "images\\screw_blob_defocus_sev3_degraded.png",
+          "image_zoom": "images\\screw_blob_defocus_sev3_degraded_zoom.png",
           "heatmap": "images\\screw_blob_defocus_sev3_degraded_heat.png",
+          "residual": "images\\screw_blob_defocus_sev3_degraded_residual.png",
+          "residual_zoom": "images\\screw_blob_defocus_sev3_degraded_residual_zoom.png",
+          "sign_agreement": "images\\screw_blob_defocus_sev3_degraded_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.4845854341983795,
+          "mean_anomaly": 0.4864423871040344,
           "relative_drr": 1.0,
           "residual_corr": 0.996054822999945
         },
         "wiener": {
           "image": "images\\screw_blob_defocus_sev3_wiener.png",
+          "image_zoom": "images\\screw_blob_defocus_sev3_wiener_zoom.png",
           "heatmap": "images\\screw_blob_defocus_sev3_wiener_heat.png",
+          "residual": "images\\screw_blob_defocus_sev3_wiener_residual.png",
+          "residual_zoom": "images\\screw_blob_defocus_sev3_wiener_residual_zoom.png",
+          "sign_agreement": "images\\screw_blob_defocus_sev3_wiener_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.4172319173812866,
+          "mean_anomaly": 0.4234533905982971,
           "relative_drr": 0.24510078478319935,
           "residual_corr": -0.2043207541310968
         },
         "restormer_deblur": {
           "image": "images\\screw_blob_defocus_sev3_restormer_deblur.png",
+          "image_zoom": "images\\screw_blob_defocus_sev3_restormer_deblur_zoom.png",
           "heatmap": "images\\screw_blob_defocus_sev3_restormer_deblur_heat.png",
+          "residual": "images\\screw_blob_defocus_sev3_restormer_deblur_residual.png",
+          "residual_zoom": "images\\screw_blob_defocus_sev3_restormer_deblur_residual_zoom.png",
+          "sign_agreement": "images\\screw_blob_defocus_sev3_restormer_deblur_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.43186646699905396,
+          "mean_anomaly": 0.43419593572616577,
           "relative_drr": 1.0182700644573794,
           "residual_corr": 0.9951463633176478
         },
         "divide": {
           "image": "images\\screw_blob_defocus_sev3_divide.png",
+          "image_zoom": "images\\screw_blob_defocus_sev3_divide_zoom.png",
           "heatmap": "images\\screw_blob_defocus_sev3_divide_heat.png",
+          "residual": "images\\screw_blob_defocus_sev3_divide_residual.png",
+          "residual_zoom": "images\\screw_blob_defocus_sev3_divide_residual_zoom.png",
+          "sign_agreement": "images\\screw_blob_defocus_sev3_divide_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.286891371011734,
+          "mean_anomaly": 0.29811638593673706,
           "relative_drr": 1.0351962081639832,
           "residual_corr": 0.9999529943881617
         }
-      }
+      },
+      "true_residual": "images\\screw_blob_defocus_sev3_true_residual.png",
+      "true_residual_zoom": "images\\screw_blob_defocus_sev3_true_residual_zoom.png",
+      "profile": "images\\screw_blob_defocus_sev3_profile.png"
     },
     {
       "id": "screw_blob_defocus_sev4",
@@ -354,37 +506,56 @@
       "panels": {
         "degraded": {
           "image": "images\\screw_blob_defocus_sev4_degraded.png",
+          "image_zoom": "images\\screw_blob_defocus_sev4_degraded_zoom.png",
           "heatmap": "images\\screw_blob_defocus_sev4_degraded_heat.png",
+          "residual": "images\\screw_blob_defocus_sev4_degraded_residual.png",
+          "residual_zoom": "images\\screw_blob_defocus_sev4_degraded_residual_zoom.png",
+          "sign_agreement": "images\\screw_blob_defocus_sev4_degraded_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.5572329759597778,
+          "mean_anomaly": 0.5559306144714355,
           "relative_drr": 1.0,
           "residual_corr": 0.9858149087675097
         },
         "wiener": {
           "image": "images\\screw_blob_defocus_sev4_wiener.png",
+          "image_zoom": "images\\screw_blob_defocus_sev4_wiener_zoom.png",
           "heatmap": "images\\screw_blob_defocus_sev4_wiener_heat.png",
+          "residual": "images\\screw_blob_defocus_sev4_wiener_residual.png",
+          "residual_zoom": "images\\screw_blob_defocus_sev4_wiener_residual_zoom.png",
+          "sign_agreement": "images\\screw_blob_defocus_sev4_wiener_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.6267048716545105,
+          "mean_anomaly": 0.6192231774330139,
           "relative_drr": 0.03669036731120149,
           "residual_corr": -0.33298362441292506
         },
         "restormer_deblur": {
           "image": "images\\screw_blob_defocus_sev4_restormer_deblur.png",
+          "image_zoom": "images\\screw_blob_defocus_sev4_restormer_deblur_zoom.png",
           "heatmap": "images\\screw_blob_defocus_sev4_restormer_deblur_heat.png",
+          "residual": "images\\screw_blob_defocus_sev4_restormer_deblur_residual.png",
+          "residual_zoom": "images\\screw_blob_defocus_sev4_restormer_deblur_residual_zoom.png",
+          "sign_agreement": "images\\screw_blob_defocus_sev4_restormer_deblur_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.564475417137146,
+          "mean_anomaly": 0.5608260631561279,
           "relative_drr": 1.011735724826298,
           "residual_corr": 0.9712667371711147
         },
         "divide": {
           "image": "images\\screw_blob_defocus_sev4_divide.png",
+          "image_zoom": "images\\screw_blob_defocus_sev4_divide_zoom.png",
           "heatmap": "images\\screw_blob_defocus_sev4_divide_heat.png",
+          "residual": "images\\screw_blob_defocus_sev4_divide_residual.png",
+          "residual_zoom": "images\\screw_blob_defocus_sev4_divide_residual_zoom.png",
+          "sign_agreement": "images\\screw_blob_defocus_sev4_divide_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.5206708908081055,
+          "mean_anomaly": 0.5233422517776489,
           "relative_drr": 1.0734629472272517,
           "residual_corr": 0.9992525445913136
         }
-      }
+      },
+      "true_residual": "images\\screw_blob_defocus_sev4_true_residual.png",
+      "true_residual_zoom": "images\\screw_blob_defocus_sev4_true_residual_zoom.png",
+      "profile": "images\\screw_blob_defocus_sev4_profile.png"
     },
     {
       "id": "bottle_texture_noise_sev2",
@@ -395,37 +566,56 @@
       "panels": {
         "degraded": {
           "image": "images\\bottle_texture_noise_sev2_degraded.png",
+          "image_zoom": "images\\bottle_texture_noise_sev2_degraded_zoom.png",
           "heatmap": "images\\bottle_texture_noise_sev2_degraded_heat.png",
+          "residual": "images\\bottle_texture_noise_sev2_degraded_residual.png",
+          "residual_zoom": "images\\bottle_texture_noise_sev2_degraded_residual_zoom.png",
+          "sign_agreement": "images\\bottle_texture_noise_sev2_degraded_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.7809461355209351,
+          "mean_anomaly": 0.8351417183876038,
           "relative_drr": 1.0,
           "residual_corr": 0.9552676538747884
         },
         "wiener": {
           "image": "images\\bottle_texture_noise_sev2_wiener.png",
+          "image_zoom": "images\\bottle_texture_noise_sev2_wiener_zoom.png",
           "heatmap": "images\\bottle_texture_noise_sev2_wiener_heat.png",
+          "residual": "images\\bottle_texture_noise_sev2_wiener_residual.png",
+          "residual_zoom": "images\\bottle_texture_noise_sev2_wiener_residual_zoom.png",
+          "sign_agreement": "images\\bottle_texture_noise_sev2_wiener_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.7975066304206848,
+          "mean_anomaly": 0.8469185829162598,
           "relative_drr": 0.8570591256419893,
           "residual_corr": 0.003159915577615084
         },
         "restormer_deblur": {
           "image": "images\\bottle_texture_noise_sev2_restormer_deblur.png",
+          "image_zoom": "images\\bottle_texture_noise_sev2_restormer_deblur_zoom.png",
           "heatmap": "images\\bottle_texture_noise_sev2_restormer_deblur_heat.png",
+          "residual": "images\\bottle_texture_noise_sev2_restormer_deblur_residual.png",
+          "residual_zoom": "images\\bottle_texture_noise_sev2_restormer_deblur_residual_zoom.png",
+          "sign_agreement": "images\\bottle_texture_noise_sev2_restormer_deblur_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.7809461355209351,
+          "mean_anomaly": 0.8351417183876038,
           "relative_drr": 1.0,
           "residual_corr": 0.9552676538747884
         },
         "divide": {
           "image": "images\\bottle_texture_noise_sev2_divide.png",
+          "image_zoom": "images\\bottle_texture_noise_sev2_divide_zoom.png",
           "heatmap": "images\\bottle_texture_noise_sev2_divide_heat.png",
+          "residual": "images\\bottle_texture_noise_sev2_divide_residual.png",
+          "residual_zoom": "images\\bottle_texture_noise_sev2_divide_residual_zoom.png",
+          "sign_agreement": "images\\bottle_texture_noise_sev2_divide_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.7549535632133484,
+          "mean_anomaly": 0.8122934103012085,
           "relative_drr": 0.9696150569961167,
           "residual_corr": 0.9092548192650652
         }
-      }
+      },
+      "true_residual": "images\\bottle_texture_noise_sev2_true_residual.png",
+      "true_residual_zoom": "images\\bottle_texture_noise_sev2_true_residual_zoom.png",
+      "profile": "images\\bottle_texture_noise_sev2_profile.png"
     },
     {
       "id": "bottle_texture_noise_sev3",
@@ -436,37 +626,56 @@
       "panels": {
         "degraded": {
           "image": "images\\bottle_texture_noise_sev3_degraded.png",
+          "image_zoom": "images\\bottle_texture_noise_sev3_degraded_zoom.png",
           "heatmap": "images\\bottle_texture_noise_sev3_degraded_heat.png",
+          "residual": "images\\bottle_texture_noise_sev3_degraded_residual.png",
+          "residual_zoom": "images\\bottle_texture_noise_sev3_degraded_residual_zoom.png",
+          "sign_agreement": "images\\bottle_texture_noise_sev3_degraded_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.9007554054260254,
+          "mean_anomaly": 0.9354504346847534,
           "relative_drr": 1.0,
           "residual_corr": 0.919925919624605
         },
         "wiener": {
           "image": "images\\bottle_texture_noise_sev3_wiener.png",
+          "image_zoom": "images\\bottle_texture_noise_sev3_wiener_zoom.png",
           "heatmap": "images\\bottle_texture_noise_sev3_wiener_heat.png",
+          "residual": "images\\bottle_texture_noise_sev3_wiener_residual.png",
+          "residual_zoom": "images\\bottle_texture_noise_sev3_wiener_residual_zoom.png",
+          "sign_agreement": "images\\bottle_texture_noise_sev3_wiener_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.9046357870101929,
+          "mean_anomaly": 0.9368538856506348,
           "relative_drr": 0.8569292359913052,
           "residual_corr": 0.0036956400598567203
         },
         "restormer_deblur": {
           "image": "images\\bottle_texture_noise_sev3_restormer_deblur.png",
+          "image_zoom": "images\\bottle_texture_noise_sev3_restormer_deblur_zoom.png",
           "heatmap": "images\\bottle_texture_noise_sev3_restormer_deblur_heat.png",
+          "residual": "images\\bottle_texture_noise_sev3_restormer_deblur_residual.png",
+          "residual_zoom": "images\\bottle_texture_noise_sev3_restormer_deblur_residual_zoom.png",
+          "sign_agreement": "images\\bottle_texture_noise_sev3_restormer_deblur_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.9007554054260254,
+          "mean_anomaly": 0.9354504346847534,
           "relative_drr": 1.0,
           "residual_corr": 0.919925919624605
         },
         "divide": {
           "image": "images\\bottle_texture_noise_sev3_divide.png",
+          "image_zoom": "images\\bottle_texture_noise_sev3_divide_zoom.png",
           "heatmap": "images\\bottle_texture_noise_sev3_divide_heat.png",
+          "residual": "images\\bottle_texture_noise_sev3_divide_residual.png",
+          "residual_zoom": "images\\bottle_texture_noise_sev3_divide_residual_zoom.png",
+          "sign_agreement": "images\\bottle_texture_noise_sev3_divide_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.8815419673919678,
+          "mean_anomaly": 0.9198527336120605,
           "relative_drr": 0.9741628803033507,
           "residual_corr": 0.8738986520201071
         }
-      }
+      },
+      "true_residual": "images\\bottle_texture_noise_sev3_true_residual.png",
+      "true_residual_zoom": "images\\bottle_texture_noise_sev3_true_residual_zoom.png",
+      "profile": "images\\bottle_texture_noise_sev3_profile.png"
     },
     {
       "id": "bottle_texture_noise_sev4",
@@ -477,37 +686,56 @@
       "panels": {
         "degraded": {
           "image": "images\\bottle_texture_noise_sev4_degraded.png",
+          "image_zoom": "images\\bottle_texture_noise_sev4_degraded_zoom.png",
           "heatmap": "images\\bottle_texture_noise_sev4_degraded_heat.png",
+          "residual": "images\\bottle_texture_noise_sev4_degraded_residual.png",
+          "residual_zoom": "images\\bottle_texture_noise_sev4_degraded_residual_zoom.png",
+          "sign_agreement": "images\\bottle_texture_noise_sev4_degraded_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.9610506296157837,
+          "mean_anomaly": 0.9741672277450562,
           "relative_drr": 1.0,
           "residual_corr": 0.8708325711119494
         },
         "wiener": {
           "image": "images\\bottle_texture_noise_sev4_wiener.png",
+          "image_zoom": "images\\bottle_texture_noise_sev4_wiener_zoom.png",
           "heatmap": "images\\bottle_texture_noise_sev4_wiener_heat.png",
+          "residual": "images\\bottle_texture_noise_sev4_wiener_residual.png",
+          "residual_zoom": "images\\bottle_texture_noise_sev4_wiener_residual_zoom.png",
+          "sign_agreement": "images\\bottle_texture_noise_sev4_wiener_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.9629359245300293,
+          "mean_anomaly": 0.9757833480834961,
           "relative_drr": 0.8567711779512872,
           "residual_corr": 0.00415931368787196
         },
         "restormer_deblur": {
           "image": "images\\bottle_texture_noise_sev4_restormer_deblur.png",
+          "image_zoom": "images\\bottle_texture_noise_sev4_restormer_deblur_zoom.png",
           "heatmap": "images\\bottle_texture_noise_sev4_restormer_deblur_heat.png",
+          "residual": "images\\bottle_texture_noise_sev4_restormer_deblur_residual.png",
+          "residual_zoom": "images\\bottle_texture_noise_sev4_restormer_deblur_residual_zoom.png",
+          "sign_agreement": "images\\bottle_texture_noise_sev4_restormer_deblur_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.9610506296157837,
+          "mean_anomaly": 0.9741672277450562,
           "relative_drr": 1.0,
           "residual_corr": 0.8708325711119494
         },
         "divide": {
           "image": "images\\bottle_texture_noise_sev4_divide.png",
+          "image_zoom": "images\\bottle_texture_noise_sev4_divide_zoom.png",
           "heatmap": "images\\bottle_texture_noise_sev4_divide_heat.png",
+          "residual": "images\\bottle_texture_noise_sev4_divide_residual.png",
+          "residual_zoom": "images\\bottle_texture_noise_sev4_divide_residual_zoom.png",
+          "sign_agreement": "images\\bottle_texture_noise_sev4_divide_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.9494984149932861,
+          "mean_anomaly": 0.9665044546127319,
           "relative_drr": 0.977148395986128,
           "residual_corr": 0.8269754697305374
         }
-      }
+      },
+      "true_residual": "images\\bottle_texture_noise_sev4_true_residual.png",
+      "true_residual_zoom": "images\\bottle_texture_noise_sev4_true_residual_zoom.png",
+      "profile": "images\\bottle_texture_noise_sev4_profile.png"
     },
     {
       "id": "carpet_blob_mixed_sev2",
@@ -518,37 +746,56 @@
       "panels": {
         "degraded": {
           "image": "images\\carpet_blob_mixed_sev2_degraded.png",
+          "image_zoom": "images\\carpet_blob_mixed_sev2_degraded_zoom.png",
           "heatmap": "images\\carpet_blob_mixed_sev2_degraded_heat.png",
+          "residual": "images\\carpet_blob_mixed_sev2_degraded_residual.png",
+          "residual_zoom": "images\\carpet_blob_mixed_sev2_degraded_residual_zoom.png",
+          "sign_agreement": "images\\carpet_blob_mixed_sev2_degraded_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.9359340071678162,
+          "mean_anomaly": 0.937767744064331,
           "relative_drr": 1.0,
           "residual_corr": 0.9514476847170195
         },
         "wiener": {
           "image": "images\\carpet_blob_mixed_sev2_wiener.png",
+          "image_zoom": "images\\carpet_blob_mixed_sev2_wiener_zoom.png",
           "heatmap": "images\\carpet_blob_mixed_sev2_wiener_heat.png",
+          "residual": "images\\carpet_blob_mixed_sev2_wiener_residual.png",
+          "residual_zoom": "images\\carpet_blob_mixed_sev2_wiener_residual_zoom.png",
+          "sign_agreement": "images\\carpet_blob_mixed_sev2_wiener_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.6802316904067993,
+          "mean_anomaly": 0.6955208778381348,
           "relative_drr": 0.8106907651294182,
           "residual_corr": 0.3381714167975949
         },
         "restormer_deblur": {
           "image": "images\\carpet_blob_mixed_sev2_restormer_deblur.png",
+          "image_zoom": "images\\carpet_blob_mixed_sev2_restormer_deblur_zoom.png",
           "heatmap": "images\\carpet_blob_mixed_sev2_restormer_deblur_heat.png",
+          "residual": "images\\carpet_blob_mixed_sev2_restormer_deblur_residual.png",
+          "residual_zoom": "images\\carpet_blob_mixed_sev2_restormer_deblur_residual_zoom.png",
+          "sign_agreement": "images\\carpet_blob_mixed_sev2_restormer_deblur_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.717976987361908,
+          "mean_anomaly": 0.7350996732711792,
           "relative_drr": 0.993558965954127,
           "residual_corr": 0.8475828444227581
         },
         "divide": {
           "image": "images\\carpet_blob_mixed_sev2_divide.png",
+          "image_zoom": "images\\carpet_blob_mixed_sev2_divide_zoom.png",
           "heatmap": "images\\carpet_blob_mixed_sev2_divide_heat.png",
+          "residual": "images\\carpet_blob_mixed_sev2_divide_residual.png",
+          "residual_zoom": "images\\carpet_blob_mixed_sev2_divide_residual_zoom.png",
+          "sign_agreement": "images\\carpet_blob_mixed_sev2_divide_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.4709628224372864,
+          "mean_anomaly": 0.4915977716445923,
           "relative_drr": 0.993687969815343,
           "residual_corr": 0.5566533919419356
         }
-      }
+      },
+      "true_residual": "images\\carpet_blob_mixed_sev2_true_residual.png",
+      "true_residual_zoom": "images\\carpet_blob_mixed_sev2_true_residual_zoom.png",
+      "profile": "images\\carpet_blob_mixed_sev2_profile.png"
     },
     {
       "id": "carpet_blob_mixed_sev3",
@@ -559,37 +806,56 @@
       "panels": {
         "degraded": {
           "image": "images\\carpet_blob_mixed_sev3_degraded.png",
+          "image_zoom": "images\\carpet_blob_mixed_sev3_degraded_zoom.png",
           "heatmap": "images\\carpet_blob_mixed_sev3_degraded_heat.png",
+          "residual": "images\\carpet_blob_mixed_sev3_degraded_residual.png",
+          "residual_zoom": "images\\carpet_blob_mixed_sev3_degraded_residual_zoom.png",
+          "sign_agreement": "images\\carpet_blob_mixed_sev3_degraded_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.9939825534820557,
+          "mean_anomaly": 0.9943715333938599,
           "relative_drr": 1.0,
           "residual_corr": 0.945116759877217
         },
         "wiener": {
           "image": "images\\carpet_blob_mixed_sev3_wiener.png",
+          "image_zoom": "images\\carpet_blob_mixed_sev3_wiener_zoom.png",
           "heatmap": "images\\carpet_blob_mixed_sev3_wiener_heat.png",
+          "residual": "images\\carpet_blob_mixed_sev3_wiener_residual.png",
+          "residual_zoom": "images\\carpet_blob_mixed_sev3_wiener_residual_zoom.png",
+          "sign_agreement": "images\\carpet_blob_mixed_sev3_wiener_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.9578191041946411,
+          "mean_anomaly": 0.9555100202560425,
           "relative_drr": 0.7231976571156725,
           "residual_corr": 0.2504975243028573
         },
         "restormer_deblur": {
           "image": "images\\carpet_blob_mixed_sev3_restormer_deblur.png",
+          "image_zoom": "images\\carpet_blob_mixed_sev3_restormer_deblur_zoom.png",
           "heatmap": "images\\carpet_blob_mixed_sev3_restormer_deblur_heat.png",
+          "residual": "images\\carpet_blob_mixed_sev3_restormer_deblur_residual.png",
+          "residual_zoom": "images\\carpet_blob_mixed_sev3_restormer_deblur_residual_zoom.png",
+          "sign_agreement": "images\\carpet_blob_mixed_sev3_restormer_deblur_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.9895930290222168,
+          "mean_anomaly": 0.9902113676071167,
           "relative_drr": 0.9936018209899221,
           "residual_corr": 0.902963472988228
         },
         "divide": {
           "image": "images\\carpet_blob_mixed_sev3_divide.png",
+          "image_zoom": "images\\carpet_blob_mixed_sev3_divide_zoom.png",
           "heatmap": "images\\carpet_blob_mixed_sev3_divide_heat.png",
+          "residual": "images\\carpet_blob_mixed_sev3_divide_residual.png",
+          "residual_zoom": "images\\carpet_blob_mixed_sev3_divide_residual_zoom.png",
+          "sign_agreement": "images\\carpet_blob_mixed_sev3_divide_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.9050769805908203,
+          "mean_anomaly": 0.9081053733825684,
           "relative_drr": 0.9906600049428566,
           "residual_corr": 0.5290524630459683
         }
-      }
+      },
+      "true_residual": "images\\carpet_blob_mixed_sev3_true_residual.png",
+      "true_residual_zoom": "images\\carpet_blob_mixed_sev3_true_residual_zoom.png",
+      "profile": "images\\carpet_blob_mixed_sev3_profile.png"
     },
     {
       "id": "carpet_blob_mixed_sev4",
@@ -600,37 +866,56 @@
       "panels": {
         "degraded": {
           "image": "images\\carpet_blob_mixed_sev4_degraded.png",
+          "image_zoom": "images\\carpet_blob_mixed_sev4_degraded_zoom.png",
           "heatmap": "images\\carpet_blob_mixed_sev4_degraded_heat.png",
+          "residual": "images\\carpet_blob_mixed_sev4_degraded_residual.png",
+          "residual_zoom": "images\\carpet_blob_mixed_sev4_degraded_residual_zoom.png",
+          "sign_agreement": "images\\carpet_blob_mixed_sev4_degraded_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.9981791377067566,
+          "mean_anomaly": 0.9990502595901489,
           "relative_drr": 1.0,
           "residual_corr": 0.9471626533572471
         },
         "wiener": {
           "image": "images\\carpet_blob_mixed_sev4_wiener.png",
+          "image_zoom": "images\\carpet_blob_mixed_sev4_wiener_zoom.png",
           "heatmap": "images\\carpet_blob_mixed_sev4_wiener_heat.png",
+          "residual": "images\\carpet_blob_mixed_sev4_wiener_residual.png",
+          "residual_zoom": "images\\carpet_blob_mixed_sev4_wiener_residual_zoom.png",
+          "sign_agreement": "images\\carpet_blob_mixed_sev4_wiener_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.9921351075172424,
+          "mean_anomaly": 0.9907844066619873,
           "relative_drr": 0.5580511406664521,
           "residual_corr": 0.13847144659969698
         },
         "restormer_deblur": {
           "image": "images\\carpet_blob_mixed_sev4_restormer_deblur.png",
+          "image_zoom": "images\\carpet_blob_mixed_sev4_restormer_deblur_zoom.png",
           "heatmap": "images\\carpet_blob_mixed_sev4_restormer_deblur_heat.png",
+          "residual": "images\\carpet_blob_mixed_sev4_restormer_deblur_residual.png",
+          "residual_zoom": "images\\carpet_blob_mixed_sev4_restormer_deblur_residual_zoom.png",
+          "sign_agreement": "images\\carpet_blob_mixed_sev4_restormer_deblur_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.9970066547393799,
+          "mean_anomaly": 0.9982160925865173,
           "relative_drr": 0.9209215630708736,
           "residual_corr": 0.8660502913362433
         },
         "divide": {
           "image": "images\\carpet_blob_mixed_sev4_divide.png",
+          "image_zoom": "images\\carpet_blob_mixed_sev4_divide_zoom.png",
           "heatmap": "images\\carpet_blob_mixed_sev4_divide_heat.png",
+          "residual": "images\\carpet_blob_mixed_sev4_divide_residual.png",
+          "residual_zoom": "images\\carpet_blob_mixed_sev4_divide_residual_zoom.png",
+          "sign_agreement": "images\\carpet_blob_mixed_sev4_divide_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.9793210029602051,
+          "mean_anomaly": 0.9819881916046143,
           "relative_drr": 0.9462950955105021,
           "residual_corr": 0.40758351190538666
         }
-      }
+      },
+      "true_residual": "images\\carpet_blob_mixed_sev4_true_residual.png",
+      "true_residual_zoom": "images\\carpet_blob_mixed_sev4_true_residual_zoom.png",
+      "profile": "images\\carpet_blob_mixed_sev4_profile.png"
     },
     {
       "id": "screw_scratch_mixed_sev2",
@@ -641,37 +926,56 @@
       "panels": {
         "degraded": {
           "image": "images\\screw_scratch_mixed_sev2_degraded.png",
+          "image_zoom": "images\\screw_scratch_mixed_sev2_degraded_zoom.png",
           "heatmap": "images\\screw_scratch_mixed_sev2_degraded_heat.png",
+          "residual": "images\\screw_scratch_mixed_sev2_degraded_residual.png",
+          "residual_zoom": "images\\screw_scratch_mixed_sev2_degraded_residual_zoom.png",
+          "sign_agreement": "images\\screw_scratch_mixed_sev2_degraded_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.5846372246742249,
+          "mean_anomaly": 0.5849494934082031,
           "relative_drr": 1.0,
           "residual_corr": 0.9348090653283601
         },
         "wiener": {
           "image": "images\\screw_scratch_mixed_sev2_wiener.png",
+          "image_zoom": "images\\screw_scratch_mixed_sev2_wiener_zoom.png",
           "heatmap": "images\\screw_scratch_mixed_sev2_wiener_heat.png",
+          "residual": "images\\screw_scratch_mixed_sev2_wiener_residual.png",
+          "residual_zoom": "images\\screw_scratch_mixed_sev2_wiener_residual_zoom.png",
+          "sign_agreement": "images\\screw_scratch_mixed_sev2_wiener_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.582874059677124,
+          "mean_anomaly": 0.585378885269165,
           "relative_drr": 0.816516509012664,
           "residual_corr": 0.3963178706643577
         },
         "restormer_deblur": {
           "image": "images\\screw_scratch_mixed_sev2_restormer_deblur.png",
+          "image_zoom": "images\\screw_scratch_mixed_sev2_restormer_deblur_zoom.png",
           "heatmap": "images\\screw_scratch_mixed_sev2_restormer_deblur_heat.png",
+          "residual": "images\\screw_scratch_mixed_sev2_restormer_deblur_residual.png",
+          "residual_zoom": "images\\screw_scratch_mixed_sev2_restormer_deblur_residual_zoom.png",
+          "sign_agreement": "images\\screw_scratch_mixed_sev2_restormer_deblur_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.5846372246742249,
+          "mean_anomaly": 0.5849494934082031,
           "relative_drr": 1.0,
           "residual_corr": 0.9348090653283601
         },
         "divide": {
           "image": "images\\screw_scratch_mixed_sev2_divide.png",
+          "image_zoom": "images\\screw_scratch_mixed_sev2_divide_zoom.png",
           "heatmap": "images\\screw_scratch_mixed_sev2_divide_heat.png",
+          "residual": "images\\screw_scratch_mixed_sev2_divide_residual.png",
+          "residual_zoom": "images\\screw_scratch_mixed_sev2_divide_residual_zoom.png",
+          "sign_agreement": "images\\screw_scratch_mixed_sev2_divide_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.6007218956947327,
+          "mean_anomaly": 0.5998978018760681,
           "relative_drr": 1.011514094296635,
           "residual_corr": 0.9399089977347064
         }
-      }
+      },
+      "true_residual": "images\\screw_scratch_mixed_sev2_true_residual.png",
+      "true_residual_zoom": "images\\screw_scratch_mixed_sev2_true_residual_zoom.png",
+      "profile": "images\\screw_scratch_mixed_sev2_profile.png"
     },
     {
       "id": "screw_scratch_mixed_sev3",
@@ -682,37 +986,56 @@
       "panels": {
         "degraded": {
           "image": "images\\screw_scratch_mixed_sev3_degraded.png",
+          "image_zoom": "images\\screw_scratch_mixed_sev3_degraded_zoom.png",
           "heatmap": "images\\screw_scratch_mixed_sev3_degraded_heat.png",
+          "residual": "images\\screw_scratch_mixed_sev3_degraded_residual.png",
+          "residual_zoom": "images\\screw_scratch_mixed_sev3_degraded_residual_zoom.png",
+          "sign_agreement": "images\\screw_scratch_mixed_sev3_degraded_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.739666223526001,
+          "mean_anomaly": 0.7318264245986938,
           "relative_drr": 1.0,
           "residual_corr": 0.8889631903747973
         },
         "wiener": {
           "image": "images\\screw_scratch_mixed_sev3_wiener.png",
+          "image_zoom": "images\\screw_scratch_mixed_sev3_wiener_zoom.png",
           "heatmap": "images\\screw_scratch_mixed_sev3_wiener_heat.png",
+          "residual": "images\\screw_scratch_mixed_sev3_wiener_residual.png",
+          "residual_zoom": "images\\screw_scratch_mixed_sev3_wiener_residual_zoom.png",
+          "sign_agreement": "images\\screw_scratch_mixed_sev3_wiener_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.7415006160736084,
+          "mean_anomaly": 0.7332088947296143,
           "relative_drr": 0.8271521455607151,
           "residual_corr": 0.40262715516376546
         },
         "restormer_deblur": {
           "image": "images\\screw_scratch_mixed_sev3_restormer_deblur.png",
+          "image_zoom": "images\\screw_scratch_mixed_sev3_restormer_deblur_zoom.png",
           "heatmap": "images\\screw_scratch_mixed_sev3_restormer_deblur_heat.png",
+          "residual": "images\\screw_scratch_mixed_sev3_restormer_deblur_residual.png",
+          "residual_zoom": "images\\screw_scratch_mixed_sev3_restormer_deblur_residual_zoom.png",
+          "sign_agreement": "images\\screw_scratch_mixed_sev3_restormer_deblur_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.739666223526001,
+          "mean_anomaly": 0.7318264245986938,
           "relative_drr": 1.0,
           "residual_corr": 0.8889631903747973
         },
         "divide": {
           "image": "images\\screw_scratch_mixed_sev3_divide.png",
+          "image_zoom": "images\\screw_scratch_mixed_sev3_divide_zoom.png",
           "heatmap": "images\\screw_scratch_mixed_sev3_divide_heat.png",
+          "residual": "images\\screw_scratch_mixed_sev3_divide_residual.png",
+          "residual_zoom": "images\\screw_scratch_mixed_sev3_divide_residual_zoom.png",
+          "sign_agreement": "images\\screw_scratch_mixed_sev3_divide_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.7491395473480225,
+          "mean_anomaly": 0.7404446005821228,
           "relative_drr": 1.0156426862483254,
           "residual_corr": 0.8906539729097358
         }
-      }
+      },
+      "true_residual": "images\\screw_scratch_mixed_sev3_true_residual.png",
+      "true_residual_zoom": "images\\screw_scratch_mixed_sev3_true_residual_zoom.png",
+      "profile": "images\\screw_scratch_mixed_sev3_profile.png"
     },
     {
       "id": "screw_scratch_mixed_sev4",
@@ -723,37 +1046,56 @@
       "panels": {
         "degraded": {
           "image": "images\\screw_scratch_mixed_sev4_degraded.png",
+          "image_zoom": "images\\screw_scratch_mixed_sev4_degraded_zoom.png",
           "heatmap": "images\\screw_scratch_mixed_sev4_degraded_heat.png",
+          "residual": "images\\screw_scratch_mixed_sev4_degraded_residual.png",
+          "residual_zoom": "images\\screw_scratch_mixed_sev4_degraded_residual_zoom.png",
+          "sign_agreement": "images\\screw_scratch_mixed_sev4_degraded_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.8393927216529846,
+          "mean_anomaly": 0.8316479921340942,
           "relative_drr": 1.0,
           "residual_corr": 0.8366431247695756
         },
         "wiener": {
           "image": "images\\screw_scratch_mixed_sev4_wiener.png",
+          "image_zoom": "images\\screw_scratch_mixed_sev4_wiener_zoom.png",
           "heatmap": "images\\screw_scratch_mixed_sev4_wiener_heat.png",
+          "residual": "images\\screw_scratch_mixed_sev4_wiener_residual.png",
+          "residual_zoom": "images\\screw_scratch_mixed_sev4_wiener_residual_zoom.png",
+          "sign_agreement": "images\\screw_scratch_mixed_sev4_wiener_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.8548984527587891,
+          "mean_anomaly": 0.8470144271850586,
           "relative_drr": 0.8295757074645989,
           "residual_corr": 0.4054538610954078
         },
         "restormer_deblur": {
           "image": "images\\screw_scratch_mixed_sev4_restormer_deblur.png",
+          "image_zoom": "images\\screw_scratch_mixed_sev4_restormer_deblur_zoom.png",
           "heatmap": "images\\screw_scratch_mixed_sev4_restormer_deblur_heat.png",
+          "residual": "images\\screw_scratch_mixed_sev4_restormer_deblur_residual.png",
+          "residual_zoom": "images\\screw_scratch_mixed_sev4_restormer_deblur_residual_zoom.png",
+          "sign_agreement": "images\\screw_scratch_mixed_sev4_restormer_deblur_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.8393927216529846,
+          "mean_anomaly": 0.8316479921340942,
           "relative_drr": 1.0,
           "residual_corr": 0.8366431247695756
         },
         "divide": {
           "image": "images\\screw_scratch_mixed_sev4_divide.png",
+          "image_zoom": "images\\screw_scratch_mixed_sev4_divide_zoom.png",
           "heatmap": "images\\screw_scratch_mixed_sev4_divide_heat.png",
+          "residual": "images\\screw_scratch_mixed_sev4_divide_residual.png",
+          "residual_zoom": "images\\screw_scratch_mixed_sev4_divide_residual_zoom.png",
+          "sign_agreement": "images\\screw_scratch_mixed_sev4_divide_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.8478255867958069,
+          "mean_anomaly": 0.8388274908065796,
           "relative_drr": 1.0183140777819988,
           "residual_corr": 0.8399645979481711
         }
-      }
+      },
+      "true_residual": "images\\screw_scratch_mixed_sev4_true_residual.png",
+      "true_residual_zoom": "images\\screw_scratch_mixed_sev4_true_residual_zoom.png",
+      "profile": "images\\screw_scratch_mixed_sev4_profile.png"
     },
     {
       "id": "bottle_texture_motion_sev2",
@@ -764,37 +1106,56 @@
       "panels": {
         "degraded": {
           "image": "images\\bottle_texture_motion_sev2_degraded.png",
+          "image_zoom": "images\\bottle_texture_motion_sev2_degraded_zoom.png",
           "heatmap": "images\\bottle_texture_motion_sev2_degraded_heat.png",
+          "residual": "images\\bottle_texture_motion_sev2_degraded_residual.png",
+          "residual_zoom": "images\\bottle_texture_motion_sev2_degraded_residual_zoom.png",
+          "sign_agreement": "images\\bottle_texture_motion_sev2_degraded_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.4676946997642517,
+          "mean_anomaly": 0.5319637060165405,
           "relative_drr": 1.0,
           "residual_corr": 0.943883949508434
         },
         "wiener": {
           "image": "images\\bottle_texture_motion_sev2_wiener.png",
+          "image_zoom": "images\\bottle_texture_motion_sev2_wiener_zoom.png",
           "heatmap": "images\\bottle_texture_motion_sev2_wiener_heat.png",
+          "residual": "images\\bottle_texture_motion_sev2_wiener_residual.png",
+          "residual_zoom": "images\\bottle_texture_motion_sev2_wiener_residual_zoom.png",
+          "sign_agreement": "images\\bottle_texture_motion_sev2_wiener_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.4724723696708679,
+          "mean_anomaly": 0.5376447439193726,
           "relative_drr": 0.8999298762183647,
           "residual_corr": 0.6195800356223267
         },
         "restormer_deblur": {
           "image": "images\\bottle_texture_motion_sev2_restormer_deblur.png",
+          "image_zoom": "images\\bottle_texture_motion_sev2_restormer_deblur_zoom.png",
           "heatmap": "images\\bottle_texture_motion_sev2_restormer_deblur_heat.png",
+          "residual": "images\\bottle_texture_motion_sev2_restormer_deblur_residual.png",
+          "residual_zoom": "images\\bottle_texture_motion_sev2_restormer_deblur_residual_zoom.png",
+          "sign_agreement": "images\\bottle_texture_motion_sev2_restormer_deblur_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.4676946997642517,
+          "mean_anomaly": 0.5319637060165405,
           "relative_drr": 1.0,
           "residual_corr": 0.943883949508434
         },
         "divide": {
           "image": "images\\bottle_texture_motion_sev2_divide.png",
+          "image_zoom": "images\\bottle_texture_motion_sev2_divide_zoom.png",
           "heatmap": "images\\bottle_texture_motion_sev2_divide_heat.png",
+          "residual": "images\\bottle_texture_motion_sev2_divide_residual.png",
+          "residual_zoom": "images\\bottle_texture_motion_sev2_divide_residual_zoom.png",
+          "sign_agreement": "images\\bottle_texture_motion_sev2_divide_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.4718537926673889,
+          "mean_anomaly": 0.535982608795166,
           "relative_drr": 0.9961006871629242,
           "residual_corr": 0.9458737538325565
         }
-      }
+      },
+      "true_residual": "images\\bottle_texture_motion_sev2_true_residual.png",
+      "true_residual_zoom": "images\\bottle_texture_motion_sev2_true_residual_zoom.png",
+      "profile": "images\\bottle_texture_motion_sev2_profile.png"
     },
     {
       "id": "bottle_texture_motion_sev3",
@@ -805,37 +1166,56 @@
       "panels": {
         "degraded": {
           "image": "images\\bottle_texture_motion_sev3_degraded.png",
+          "image_zoom": "images\\bottle_texture_motion_sev3_degraded_zoom.png",
           "heatmap": "images\\bottle_texture_motion_sev3_degraded_heat.png",
+          "residual": "images\\bottle_texture_motion_sev3_degraded_residual.png",
+          "residual_zoom": "images\\bottle_texture_motion_sev3_degraded_residual_zoom.png",
+          "sign_agreement": "images\\bottle_texture_motion_sev3_degraded_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.6144470572471619,
+          "mean_anomaly": 0.6701508164405823,
           "relative_drr": 1.0,
           "residual_corr": 0.9005413526625392
         },
         "wiener": {
           "image": "images\\bottle_texture_motion_sev3_wiener.png",
+          "image_zoom": "images\\bottle_texture_motion_sev3_wiener_zoom.png",
           "heatmap": "images\\bottle_texture_motion_sev3_wiener_heat.png",
+          "residual": "images\\bottle_texture_motion_sev3_wiener_residual.png",
+          "residual_zoom": "images\\bottle_texture_motion_sev3_wiener_residual_zoom.png",
+          "sign_agreement": "images\\bottle_texture_motion_sev3_wiener_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.5279000997543335,
+          "mean_anomaly": 0.5898352861404419,
           "relative_drr": 0.4794935416292966,
           "residual_corr": -0.03597829166644982
         },
         "restormer_deblur": {
           "image": "images\\bottle_texture_motion_sev3_restormer_deblur.png",
+          "image_zoom": "images\\bottle_texture_motion_sev3_restormer_deblur_zoom.png",
           "heatmap": "images\\bottle_texture_motion_sev3_restormer_deblur_heat.png",
+          "residual": "images\\bottle_texture_motion_sev3_restormer_deblur_residual.png",
+          "residual_zoom": "images\\bottle_texture_motion_sev3_restormer_deblur_residual_zoom.png",
+          "sign_agreement": "images\\bottle_texture_motion_sev3_restormer_deblur_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.45823007822036743,
+          "mean_anomaly": 0.5223389863967896,
           "relative_drr": 1.1996168916550511,
           "residual_corr": 0.9543376896340743
         },
         "divide": {
           "image": "images\\bottle_texture_motion_sev3_divide.png",
+          "image_zoom": "images\\bottle_texture_motion_sev3_divide_zoom.png",
           "heatmap": "images\\bottle_texture_motion_sev3_divide_heat.png",
+          "residual": "images\\bottle_texture_motion_sev3_divide_residual.png",
+          "residual_zoom": "images\\bottle_texture_motion_sev3_divide_residual_zoom.png",
+          "sign_agreement": "images\\bottle_texture_motion_sev3_divide_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.5425360202789307,
+          "mean_anomaly": 0.6012542247772217,
           "relative_drr": 1.304959179542541,
           "residual_corr": 0.9718974642559902
         }
-      }
+      },
+      "true_residual": "images\\bottle_texture_motion_sev3_true_residual.png",
+      "true_residual_zoom": "images\\bottle_texture_motion_sev3_true_residual_zoom.png",
+      "profile": "images\\bottle_texture_motion_sev3_profile.png"
     },
     {
       "id": "bottle_texture_motion_sev4",
@@ -846,37 +1226,56 @@
       "panels": {
         "degraded": {
           "image": "images\\bottle_texture_motion_sev4_degraded.png",
+          "image_zoom": "images\\bottle_texture_motion_sev4_degraded_zoom.png",
           "heatmap": "images\\bottle_texture_motion_sev4_degraded_heat.png",
+          "residual": "images\\bottle_texture_motion_sev4_degraded_residual.png",
+          "residual_zoom": "images\\bottle_texture_motion_sev4_degraded_residual_zoom.png",
+          "sign_agreement": "images\\bottle_texture_motion_sev4_degraded_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.7176023125648499,
+          "mean_anomaly": 0.7662572860717773,
           "relative_drr": 1.0,
           "residual_corr": 0.8589533050483645
         },
         "wiener": {
           "image": "images\\bottle_texture_motion_sev4_wiener.png",
+          "image_zoom": "images\\bottle_texture_motion_sev4_wiener_zoom.png",
           "heatmap": "images\\bottle_texture_motion_sev4_wiener_heat.png",
+          "residual": "images\\bottle_texture_motion_sev4_wiener_residual.png",
+          "residual_zoom": "images\\bottle_texture_motion_sev4_wiener_residual_zoom.png",
+          "sign_agreement": "images\\bottle_texture_motion_sev4_wiener_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.7244155406951904,
+          "mean_anomaly": 0.7731344103813171,
           "relative_drr": 2.584349284081699,
           "residual_corr": -0.5298267572662599
         },
         "restormer_deblur": {
           "image": "images\\bottle_texture_motion_sev4_restormer_deblur.png",
+          "image_zoom": "images\\bottle_texture_motion_sev4_restormer_deblur_zoom.png",
           "heatmap": "images\\bottle_texture_motion_sev4_restormer_deblur_heat.png",
+          "residual": "images\\bottle_texture_motion_sev4_restormer_deblur_residual.png",
+          "residual_zoom": "images\\bottle_texture_motion_sev4_restormer_deblur_residual_zoom.png",
+          "sign_agreement": "images\\bottle_texture_motion_sev4_restormer_deblur_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.7176023125648499,
+          "mean_anomaly": 0.7662572860717773,
           "relative_drr": 1.0638204143563883,
           "residual_corr": -0.006161278765843461
         },
         "divide": {
           "image": "images\\bottle_texture_motion_sev4_divide.png",
+          "image_zoom": "images\\bottle_texture_motion_sev4_divide_zoom.png",
           "heatmap": "images\\bottle_texture_motion_sev4_divide_heat.png",
+          "residual": "images\\bottle_texture_motion_sev4_divide_residual.png",
+          "residual_zoom": "images\\bottle_texture_motion_sev4_divide_residual_zoom.png",
+          "sign_agreement": "images\\bottle_texture_motion_sev4_divide_sign_agreement.png",
           "score": 1.0,
-          "mean_anomaly": 0.7084076404571533,
+          "mean_anomaly": 0.7578240633010864,
           "relative_drr": 1.2663156937410573,
           "residual_corr": 0.7935854927491713
         }
-      }
+      },
+      "true_residual": "images\\bottle_texture_motion_sev4_true_residual.png",
+      "true_residual_zoom": "images\\bottle_texture_motion_sev4_true_residual_zoom.png",
+      "profile": "images\\bottle_texture_motion_sev4_profile.png"
     }
   ]
 }

@@ -42,21 +42,32 @@ Motion_Deblurring/Defocus_Deblurring checkpoints (`results/drr_study_deblur_corr
 dispatched per image by DBDE's blur-kind estimate), not its denoising one,
 preserve too: scratch relative DRR 1.22, and — the check that mattered, see
 below — residual correlation 0.70, well above the un-restored baseline's own
-0.59. A learned model actually trained to deblur does not erode defects
-either.
+0.59. A learned model actually trained to deblur does not destroy defect
+structure either.
 
-**The one class that does erode: single-shot closed-form Wiener
-deconvolution.** Classical Wiener (`results/wiener_bridge_ablation*`) gives
-scratch relative DRR 0.079; a `classical_pipeline` chaining illumination
-correction, denoising, and Wiener deblurring gives 0.571
-(`results/drr_study_gonogo*`). Swept across five orders of magnitude of its
-own regularization constant (`results/wiener_nsr_sweep*`,
-`figures/wiener_nsr_sweep.png`), scratch **residual correlation** — not just
-DRR — stays at or near zero throughout (-0.06 to +0.12, all within noise of
-zero, nsr from 1e-5 to 1.0). The defect isn't attenuated by some regularization
-settings and preserved by others; it's gone at every setting tested. This is
+**The one class that does: single-shot closed-form Wiener deconvolution —
+though not by erasing the defect, which is a correction on this project's
+own earlier claim (see FINDINGS.md Sec. 1.1 for the full evidence).**
+Classical Wiener (`results/wiener_bridge_ablation*`) gives scratch relative
+DRR 0.079; a `classical_pipeline` chaining illumination correction,
+denoising, and Wiener deblurring gives 0.571 (`results/drr_study_gonogo*`).
+Swept across five orders of magnitude of its own regularization constant
+(`results/wiener_nsr_sweep*`, `figures/wiener_nsr_sweep.png`), scratch
+**residual correlation** — not just DRR — stays at or near zero throughout
+(-0.06 to +0.12, all within noise of zero, nsr from 1e-5 to 1.0). This is
 the most dramatic, and best-supported, single result this project has
-produced.
+produced — but read it as the residual's *shape* failing to correlate with
+the true defect, not the defect being absent. Direct pixel inspection
+(524-pixel scratch mask, one example) found the true residual runs
+uniformly +0.075 to +0.300 there, while Wiener's own residual over the same
+pixels runs -0.034 to +0.296 — comparable peak magnitude, sign-flipping
+throughout. A cross-defect residual profile (a slice perpendicular to the
+defect, every restorer plotted together) makes the actual mechanism
+visible: Wiener's energy is smeared into ringing lobes on either side of
+the true location, with no clean peak at the center, while DIVIDE's and a
+genuine deblurrer's both track the true residual's clean centered bump.
+**Single-shot Wiener replaces the defect's structure with ringing at the
+same location — it does not remove the energy.**
 
 **The mechanism, located by a bridging ablation.** Five configurations
 walking from classical Wiener to PCIM's `x_cons`, one variable at a time
@@ -64,29 +75,32 @@ walking from classical Wiener to PCIM's `x_cons`, one variable at a time
 
 | step | change | scratch relative DRR | scratch residual corr |
 |---|---|---|---|
-| A | classical Wiener, flat nsr | 0.079 | -0.058 (erosion, confirmed real) |
+| A | classical Wiener, flat nsr | 0.079 | -0.058 (structure destroyed, confirmed real) |
 | B | + nsr derived from DBDE's own estimate | 0.129 | -0.053 (same) |
 | C | + unrolled HQS (5 iters, growing ρ), still raw-pixel domain | 1.377 | 0.864 (flips to genuine preservation) |
 | D | + VST/illumination domain (= `x_cons`) | 1.379 | 0.859 |
-| E | `x_cons`, regularization floor removed | 1.319 | 0.563 (back near baseline, not erosion) |
+| E | `x_cons`, regularization floor removed | 1.319 | 0.563 (back near baseline, structure intact but weaker) |
 
 **Iteration, not regularization, is decisive.** At matched regularization
 magnitude, switching one-shot division (B) for unrolled half-quadratic
 splitting (C) flips scratch residual correlation from -0.05 to 0.86 — the
-defect goes from gone to genuinely preserved. Candidate mechanism: each HQS
-step solves a data term anchored toward the *previous* iterate, so even at
-negligible regularization the recursion takes several partial steps rather
-than committing in one shot to the full inversion that destroys sparse
-content. Regularization has a separate, smaller job: config E shows that
-removing PCIM's `nsr_floor` keeps the safety property (no erosion — 0.563 is
-nowhere near A/B's near-zero) but loses the *gain* — E's correlation drops
-back to roughly the do-nothing baseline (0.59), while C/D exceed it (0.86).
+defect's residual goes from structurally destroyed (ringing, correlation
+near zero — not absent, see the correction above) to genuinely preserved.
+Candidate mechanism: each HQS step solves a data term anchored toward the
+*previous* iterate, so even at negligible regularization the recursion
+takes several partial steps rather than committing in one shot to the full
+inversion that produces ringing at sparse content's edges. Regularization
+has a separate, smaller job: config E shows that removing PCIM's
+`nsr_floor` keeps the shape-preserving property (0.563 is nowhere near
+A/B's near-zero) but loses the *gain* — E's correlation drops back to
+roughly the do-nothing baseline (0.59), while C/D exceed it (0.86).
 Iteration is what prevents the failure; adequate regularization is what
 turns "no worse than doing nothing" into "measurably better."
 
 **What DIVIDE therefore demonstrates.** Its unrolled HQS formulation is
-exactly the property that avoids single-shot Wiener's erosion — the
-architecture was correct, but the original explanation for *why* was not:
+exactly the property that avoids single-shot Wiener's ringing-at-the-edge
+failure — the architecture was correct, but the original explanation for
+*why* was not:
 "content-agnostic" was the right instinct, but the failure mode it prevents
 turned out to be specific to one-shot inversion, not to restoration or even
 to deconvolution in general. DIVIDE does not solve a problem all restoration
@@ -106,16 +120,20 @@ the claim above rather than by design:
   denominator) — it reads "made it worse" on mildly-degraded images that were
   in fact restored well, and "did nothing" on severely-degraded images that
   were in fact restored badly. Report it alongside absolute PSNR, never alone.
-- **DRR alone cannot distinguish genuine preservation from ringing once it
-  approaches or exceeds ~1.0** — a restorer can leave residual energy at a
-  defect's location with the right magnitude but the wrong shape. It needs
+- **DRR alone cannot distinguish genuine preservation from ringing** — a
+  restorer can leave residual energy at a defect's location with
+  comparable magnitude but the wrong shape. It needs
   `defect_residual_correlation` (Pearson correlation between the restored and
   true residual, mean-centred within the mask) as a companion measurement.
-  Below relative DRR ~0.3–0.4 the two metrics always agreed throughout this
-  project's data, so the erosion boundary above was never actually in doubt —
-  only the readings at or above ~1.0 needed the second check, and every one
-  checked out as genuine except config E, which the correlation check
-  correctly demoted from "as good as C/D" to "no better than doing nothing."
+  Originally thought to matter only once relative DRR approaches or exceeds
+  ~1.0 (config E-style cases); a direct pixel/profile inspection while
+  building the demo (FINDINGS.md Sec. 1.1) found ringing explains the
+  *low*-DRR regime too, not just the high one — single-shot Wiener's
+  0.08–0.15 relative DRR isn't the defect fading toward absence, it's the
+  same ringing mechanism read through the magnitude ratio instead of
+  through excess energy. DRR and correlation "agreeing" that something is
+  wrong at low DRR was never actually in doubt; *what specifically* was
+  wrong there stayed unexamined until this correction.
 
 **Two results build directly on the mechanism above and are reported in
 full in [FINDINGS.md](FINDINGS.md), not duplicated here:**
@@ -123,7 +141,7 @@ full in [FINDINGS.md](FINDINGS.md), not duplicated here:**
 - **L_pres — established.** A 150-example held-out bootstrap comparison of
   PCIM trained with vs. without the preservation loss: scratch residual-
   correlation delta 95% CI [0.188, 0.296], excludes zero. Given the
-  iteration mechanism above already prevents erasure, L_pres still adds a
+  iteration mechanism above already prevents structural destruction, L_pres still adds a
   real, measurable amount of shape fidelity on top of it, at a measured
   cost of 1.64 dB PSNR.
 - **Does preserving the residual help detection?** A 360-cell frozen-
@@ -242,7 +260,9 @@ The actual sequence run, each building on the last:
    Restormer's actual deblurring checkpoints, not the denoising one: yes.
 3. **Bridging ablation + nsr sweep** (`results/wiener_bridge_ablation*`,
    `results/wiener_nsr_sweep*`) — located *why*: iteration, not
-   regularization strength, separates erosion from preservation.
+   regularization strength, separates structural destruction (ringing) from
+   preservation. (The "destruction" framing is a correction on this
+   section's own earlier "erosion" language — see FINDINGS.md Sec. 1.1.)
 
 See **The claim** above for the full numbers and reasoning at each step.
 

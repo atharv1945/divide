@@ -3,16 +3,20 @@
 Digital Image Processing (BCSE403L), VIT Vellore. This document reports
 three things at different levels of confidence, deliberately kept separate:
 
-1. **The single-shot vs. iterative deconvolution mechanism — established.**
-   The most striking, best-supported result this project has produced, and
-   the one everything after it builds on: single-shot Wiener deconvolution
-   erases defects regardless of regularization strength; PCIM's unrolled,
-   iterative structure does not. This comes first because it is why the
-   rest of the document is worth reading, not an afterthought to it.
+1. **The single-shot vs. iterative deconvolution mechanism — established,
+   corrected once.** The most striking, best-supported result this project
+   has produced, and the one everything after it builds on: single-shot
+   Wiener deconvolution replaces a defect's residual with ringing at the
+   same location, regardless of regularization strength; PCIM's unrolled,
+   iterative structure does not. This project originally described this as
+   "erasure" — a direct pixel-level and profile inspection (Sec. 1.1) found
+   that framing was wrong about *what* is destroyed, corrected here rather
+   than left standing. This comes first because it is why the rest of the
+   document is worth reading, not an afterthought to it.
 2. **The L_pres claim — established.** A 150-example held-out bootstrap
    comparison of the two final L_pres-ablation checkpoints, refining the
-   mechanism above: given PCIM's iterative structure already avoids
-   erasure, does the *additional* preservation loss term do anything?
+   mechanism above: given PCIM's iterative structure already avoids this
+   failure, does the *additional* preservation loss term do anything?
 3. **The detection-grid results — mixed confidence, reported honestly.**
    A 360-cell frozen-detector grid, gated by a harness-correctness check and
    a bootstrap CI on every headline number, because the first pass produced
@@ -29,9 +33,9 @@ the script that produced it. No number here was estimated or interpolated.
 
 ## 1. Single-shot vs. iterative deconvolution — the mechanism (established)
 
-**Question:** DIVIDE's whole architecture is premised on avoiding the defect
-erasure a naive inverse filter causes. Is that actually true, and if so, is
-it regularization tuning or something structural?
+**Question:** DIVIDE's whole architecture is premised on avoiding a defect-
+destroying failure a naive inverse filter causes. Is that actually true,
+and if so, is it regularization tuning or something structural?
 
 **Method 1 — regularization sweep.** `src/experiments/wiener_regularization_sweep.py`
 swept classical Wiener's noise-to-signal regularization constant across five
@@ -52,9 +56,12 @@ preservation, especially once DRR approaches or exceeds 1.0. Sections 2 and
 
 Across five orders of magnitude of the one knob a single-shot Wiener filter
 has, scratch residual correlation **stays within noise of zero throughout**
-(−0.058 to +0.120). The defect is not attenuated at some settings and
-preserved at others — it is gone at every setting tested. Regularization
-tuning cannot fix this.
+(−0.058 to +0.120) — the residual's *shape* fails to track the true
+defect's shape at every setting tested. Regularization tuning cannot fix
+this. **This is not the same as the defect being attenuated or absent** —
+Sec. 1.1 shows the residual's energy survives; read the "erosion" language
+in the original write-up of this sweep as shape-correlation collapsing,
+not magnitude vanishing.
 
 **Method 2 — bridging ablation.** `src/models/wiener_ablation.py`'s five
 configurations walk from classical Wiener to PCIM's own `x_cons` path one
@@ -71,25 +78,85 @@ which single change flips the outcome:
 
 At matched regularization magnitude, switching one-shot division (B) for
 unrolled half-quadratic splitting (C) flips scratch residual correlation
-from −0.053 to 0.864 in one step, nothing else changed — the defect goes
-from erased to genuinely preserved. **Iteration, not regularization
-strength, is what separates erosion from preservation.** Regularization
-still has a real, smaller job: config E shows removing PCIM's `nsr_floor`
-keeps the no-erosion property (0.563, nowhere near A/B's near-zero) but
-loses the extra gain C/D show — adequate regularization is what turns "no
-worse than doing nothing" into "measurably better," but iteration is what
-prevents the failure in the first place.
+from −0.053 to 0.864 in one step, nothing else changed — the defect's
+residual goes from structurally destroyed to genuinely preserved.
+**Iteration, not regularization strength, is what separates structural
+destruction from preservation.** Regularization still has a real, smaller
+job: config E shows removing PCIM's `nsr_floor` keeps the shape-preserving
+property (0.563, nowhere near A/B's near-zero) but loses the extra gain
+C/D show — adequate regularization is what turns "no worse than doing
+nothing" into "measurably better," but iteration is what prevents the
+failure in the first place.
+
+### 1.1 Correction: single-shot Wiener does not erase the defect — it replaces its structure with ringing at the same location
+
+**This corrects the "erasure"/"gone" language used above and in earlier
+versions of this document and `README.md`.** Building the demo (Step 4)
+required visualizing exactly what a restored residual looks like, not just
+its summary statistics — and direct pixel inspection of the striking case
+(`bottle`/`scratch`/`defocus`, severity 4; `demo_data/manifest.json`,
+`src/demo/precompute.py`) showed the original claim was imprecise about
+*what* single-shot Wiener destroys.
+
+**The residual's energy survives, at nearly the true peak magnitude, at
+the right location.** Within the defect mask (524 pixels), the true
+residual is uniformly positive, +0.075 to +0.300. Wiener's residual over
+the *same* 524 pixels ranges −0.034 to +0.296 — its peak (0.296) is barely
+below the true residual's peak (0.300), and its global maximum anywhere in
+the image (0.306) sits immediately adjacent to the mask. The energy is not
+gone. What's gone is the **sign pattern**: the true residual never changes
+sign inside the mask; Wiener's flips repeatedly, pixel to pixel — which is
+exactly what collapses `defect_residual_correlation` to near zero (0.008
+for this example) without collapsing the magnitude ratio `relative_drr` to
+zero either (0.146 — reduced, not absent).
+
+**The cross-defect residual profile makes this legible in one picture** —
+a slice perpendicular to the defect, true residual vs. every restorer's, on
+one axis (the exact visualization: skeletonize the mask, sample the
+residual along the normal at a few points near the middle, average):
+
+![cross-defect residual profile](figures/striking_case_residual_profile.png)
+
+True and DIVIDE both show a single, clean, centered bump. Wiener shows
+**no clean peak at the center at all** — its energy is smeared into broad
+ringing lobes on either side of the true location, barely elevated above
+its own sidelobes at distance zero. This is the textbook signature of
+deconvolution ringing: energy displaced from an edge into oscillating
+lobes around it, not removed. `demo_data/manifest.json`'s per-panel
+sign-agreement maps (green where a restorer's residual sign matches the
+true residual's, red where it flips) show the same thing pixel by pixel.
+
+**Restated precisely:** single-shot Wiener deconvolution does not erase a
+defect. It replaces the defect's residual with a ringing artifact
+concentrated at the same edge, with comparable peak magnitude but a
+structurally scrambled sign pattern — which is why `relative_drr` reads
+reduced-but-nonzero (0.15–0.35 depending on example) while
+`defect_residual_correlation` reads near zero. "Erosion"/"gone" language
+elsewhere in this project's history described the correlation collapsing,
+not the energy vanishing; read it that way.
+
+**Hypothesis, not a result, flagged as such:** ringing is itself a form of
+local structure the region didn't have before — plausibly anomalous in its
+own right, independent of whatever the true defect looked like. This is a
+candidate explanation for Section 3.2's finding that `wiener` on PatchCore
+has a small, only marginally-established detection benefit (gap_closed
++0.089, 95% CI [−0.001, 0.173], touching zero) despite `relative_drr`
+showing real residual reduction: PatchCore may be flagging the region
+because ringing itself looks unusual, not because it correctly recovered
+the original defect's signal. This grid does not test that mechanism
+directly — it is a hypothesis the profile/sign-agreement evidence makes
+plausible, not something established here.
 
 **Why this is the load-bearing result.** Every other finding in this
-document assumes PCIM's iterative structure already avoids erasure — that
-assumption is what this section establishes, not what it takes for granted.
-It also narrows the project's original hypothesis: learned denoisers and
-learned deblurrers, run at full strength on real MVTec, do not show this
-failure mode either (see `README.md`'s "The claim" for that fuller
-investigation) — erasure is a property of single-shot closed-form inversion
-specifically, not of restoration or deconvolution in general. DIVIDE's
-architecture avoids a real, narrower failure than originally hypothesized,
-structurally rather than by luck
+document assumes PCIM's iterative structure already avoids this failure —
+that assumption is what this section establishes, not what it takes for
+granted. It also narrows the project's original hypothesis: learned
+denoisers and learned deblurrers, run at full strength on real MVTec, do
+not show this failure mode either (see `README.md`'s "The claim" for that
+fuller investigation) — structural destruction via ringing is a property of
+single-shot closed-form inversion specifically, not of restoration or
+deconvolution in general. DIVIDE's architecture avoids a real, narrower
+failure than originally hypothesized, structurally rather than by luck
 (`tests/test_pcim.py::test_hqs_without_prox_is_linear` verifies the gated-off
 path is provably an affine, content-agnostic map).
 
@@ -337,6 +404,7 @@ non-trivial work rather than marginal polish.
 | file | shows |
 |---|---|
 | `figures/wiener_nsr_sweep.png` | scratch residual correlation vs. regularization constant, Section 1 |
+| `figures/striking_case_residual_profile.png` | cross-defect residual profile, true vs. every restorer, Section 1.1's correction |
 | `figures/step3_gapclosed_forest.png` | gap_closed with 95% bootstrap CI, all 10 restorer×detector pairs |
 | `figures/step3_auroc_by_restorer.png` | clean / degraded / restored image-AUROC bars, both detectors |
 | `figures/step3_scratch_drr_corr.png` | scratch relative DRR + residual correlation by restorer, grid scope |
@@ -356,6 +424,7 @@ non-trivial work rather than marginal polish.
 | `results/step3_grid_gapclosed_bootstrap.csv` | Section 3.2's bootstrap CIs |
 | `results/patchcore_repro_check.json` | Section 3.1's published-config reproduction check |
 | `results/step3_drr_companion.csv` / `_by_kind.csv` | Section 3.3's companion study |
+| `demo_data/manifest.json` | Section 1.1's per-pixel evidence (524-pixel mask stats, profile data) for the striking case, plus every other precomputed example's |
 
 ## Limitations
 
@@ -382,6 +451,13 @@ non-trivial work rather than marginal polish.
   tolerance) is a hypothesis consistent with the data, not something this
   grid tests directly.** No experiment here manipulates the detector's
   internal tolerance mechanism; confirming it would need a different study.
+- **"Ringing is itself anomalous" (Sec. 1.1) is a hypothesis, not a
+  result.** It is offered as a candidate explanation for wiener's weak,
+  barely-established PatchCore gain; nothing in this project isolates
+  ringing from the rest of what changed and tests it against the detector
+  directly. The profile/sign-agreement evidence supports that ringing is
+  structurally different from genuine defect signal — it does not show
+  that PatchCore specifically reacts to that difference for that reason.
 - **Correlational, not causal, throughout** — DRR, residual correlation, and
   gap_closed are all measured associations between a restorer and an
   outcome on a fixed set of synthetic/real degradations; no claim here is

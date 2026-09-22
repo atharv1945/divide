@@ -26,37 +26,48 @@ learned denoiser structurally cannot.
    not the denoising one) — also preserves (scratch relative DRR 1.22,
    residual correlation 0.70, above the do-nothing baseline's own 0.59). Not
    supported either.
-3. Classical single-shot Wiener deconvolution — this is the one that erodes.
-   Scratch relative DRR 0.08–0.57 depending on scope, residual correlation
-   pinned at/near zero across five orders of magnitude of its own
-   regularization constant. Confirmed, not a fluke: this is the most
-   dramatic and best-supported number this project has produced.
+3. Classical single-shot Wiener deconvolution — this is the one that
+   destroys defect structure. Scratch relative DRR 0.08–0.57 depending on
+   scope, residual correlation pinned at/near zero across five orders of
+   magnitude of its own regularization constant. Confirmed, not a fluke:
+   this is the most dramatic and best-supported number this project has
+   produced. **CORRECTED after this section was first written** (see
+   below) — "destroys structure" is deliberate, not "erases": the
+   residual's energy survives, comparable in peak magnitude to the true
+   defect, at the same location. What collapses is the sign pattern, not
+   the magnitude - Wiener's ringing at the defect's edge, not absence.
 
 **The mechanism** (a bridging ablation, classical Wiener → PCIM's `x_cons`,
 one variable at a time): switching one-shot division for PCIM's unrolled
 half-quadratic-splitting recursion, at matched regularization strength,
 flips scratch residual correlation from -0.05 to 0.86. Regularization
 strength turned out NOT to be the mechanism (the reverse-direction check -
-disabling PCIM's `nsr_floor` - did not bring erosion back); iteration is.
-Candidate reason: each HQS step anchors toward the previous iterate rather
-than committing to the full inversion in one shot.
+disabling PCIM's `nsr_floor` - did not bring the ringing failure back);
+iteration is. Candidate reason: each HQS step anchors toward the previous
+iterate rather than committing to the full inversion in one shot.
 
 **What DIVIDE actually demonstrates:** its unrolled HQS formulation is
-exactly the property that avoids single-shot Wiener's erosion -
-`tests/test_pcim.py::test_hqs_without_prox_is_linear` verifies the
+exactly the property that avoids single-shot Wiener's ringing-at-the-edge
+failure - `tests/test_pcim.py::test_hqs_without_prox_is_linear` verifies the
 gated-off path is provably affine and content-agnostic. The architecture was
 right; the original justification ("restoration in general erases defects")
-was not. DIVIDE does not solve a problem all restoration methods have -
-competent denoisers and deblurrers mostly don't have it - it demonstrates
-that one specific, real failure mode (single-shot closed-form inversion) is
-avoidable and locates the property that avoids it. That failure mode is
-still the one industrial inspection is most exposed to, since motion blur
-and defocus - exactly what a naive Wiener step gets reached for - dominate
-real inspection settings.
+was not - and, as of this handoff document's latest revision, neither was
+the ORIGINAL correction: single-shot Wiener does not erase defects either,
+it replaces their structure with ringing at the same location (see
+FINDINGS.md Sec. 1.1 - found by directly inspecting residual pixels and a
+cross-defect profile while building the demo, not assumed). DIVIDE does not
+solve a problem all restoration methods have - competent denoisers and
+deblurrers mostly don't have it - it demonstrates that one specific, real
+failure mode (single-shot closed-form inversion producing ringing at sparse
+content's edges) is avoidable and locates the property that avoids it. That
+failure mode is still the one industrial inspection is most exposed to,
+since motion blur and defocus - exactly what a naive Wiener step gets
+reached for - dominate real inspection settings.
 
-Full numbers, the per-config table, the nsr sweep figure, and the two
-methodological findings about DRemR and DRR/residual-correlation are in
-README.md's "The claim" - read that before deciding what (if anything) still
+Full numbers, the per-config table, the nsr sweep figure, the residual
+profile/sign-agreement evidence, and the two methodological findings about
+DRemR and DRR/residual-correlation are in README.md's "The claim" and
+FINDINGS.md Sec. 1 - read those before deciding what (if anything) still
 needs testing.
 
 **Two things built on top of this mechanism since the above was written, both
@@ -319,9 +330,9 @@ Ran to completion: 14,400 rows (3 categories × 20 images × 6 families × 5 sev
 | wiener | 0.51 | erases roughly half the defect residual |
 | classical_pipeline | 0.49 | same |
 
-The plain denoisers (bilateral/nlm/gaussian) sit close to 1.0 across every severity (`figures/drr_vs_severity_drr_study_real.png`) — spatial smoothing alone doesn't do much to a scratch or blob at these degradation levels. The deconvolution-based methods (wiener, and `classical_pipeline`, which chains illumination correction, denoising, and Wiener deblurring) sit consistently around 0.5 — deconvolution's ringing/sharpening measurably suppresses fine defect structure, most visibly for scratches specifically (`figures/drr_by_kind_drr_study_real.png`). clahe/msrcr's numbers above 1.0 are not "better than identity" in any meaningful sense - their contrast stretching inflates the raw pixel-difference metric on both normal and defect regions alike (see their `dremr_mean` in `results/drr_study_real_summary.csv`, both strongly negative - they move *further* from the clean image than the degraded input already was). This is the same split that later analysis (see README's "The claim") traced to a mechanism - deconvolution vs. denoising - and then to unrolled iteration vs. one-shot inversion specifically, using exactly this wiener/classical_pipeline result as the erosion anchor.
+The plain denoisers (bilateral/nlm/gaussian) sit close to 1.0 across every severity (`figures/drr_vs_severity_drr_study_real.png`) — spatial smoothing alone doesn't do much to a scratch or blob at these degradation levels. The deconvolution-based methods (wiener, and `classical_pipeline`, which chains illumination correction, denoising, and Wiener deblurring) sit consistently around 0.5 — deconvolution's ringing/sharpening measurably suppresses fine defect structure, most visibly for scratches specifically (`figures/drr_by_kind_drr_study_real.png`). clahe/msrcr's numbers above 1.0 are not "better than identity" in any meaningful sense - their contrast stretching inflates the raw pixel-difference metric on both normal and defect regions alike (see their `dremr_mean` in `results/drr_study_real_summary.csv`, both strongly negative - they move *further* from the clean image than the degraded input already was). This is the same split that later analysis (see README's "The claim") traced to a mechanism - deconvolution vs. denoising - and then to unrolled iteration vs. one-shot inversion specifically, using exactly this wiener/classical_pipeline result as the ringing-vs-preservation anchor.
 
-At the time this was written, this was **not the go/no-go verdict** — classical restorers only, with the note that classical restorers alone can't settle the question the project is actually about. **That measurement has since happened** (`results/drr_study_gonogo*`, see "What this project claims" above): a real learned denoiser (Restormer) preserves defects the same way the classical denoisers here do, while classical deconvolution erodes them the same way it does here — confirming the split predicted by this table is about mechanism (deconvolve vs. denoise), not learned vs. classical. NAFNet's result in that run doesn't extend this table's pattern one way or the other - it was out-of-distribution on synthetic degradations (see the caveat in "What this project claims").
+At the time this was written, this was **not the go/no-go verdict** — classical restorers only, with the note that classical restorers alone can't settle the question the project is actually about. **That measurement has since happened** (`results/drr_study_gonogo*`, see "What this project claims" above): a real learned denoiser (Restormer) preserves defects the same way the classical denoisers here do, while classical deconvolution destroys their structure the same way it does here — confirming the split predicted by this table is about mechanism (deconvolve vs. denoise), not learned vs. classical. NAFNet's result in that run doesn't extend this table's pattern one way or the other - it was out-of-distribution on synthetic degradations (see the caveat in "What this project claims").
 
 ## Known fragile points
 
