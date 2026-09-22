@@ -4,6 +4,11 @@
 
 Digital Image Processing (BCSE403L) course project. Atharv Agarwal, VIT Vellore.
 
+**[FINDINGS.md](FINDINGS.md)** is the full report: the mechanism, the L_pres
+result, and the detection-grid result, each at the confidence level its own
+evidence supports. This README is orientation and status; FINDINGS.md is
+the numbers.
+
 ---
 
 ## The claim
@@ -112,6 +117,26 @@ the claim above rather than by design:
   checked out as genuine except config E, which the correlation check
   correctly demoted from "as good as C/D" to "no better than doing nothing."
 
+**Two results build directly on the mechanism above and are reported in
+full in [FINDINGS.md](FINDINGS.md), not duplicated here:**
+
+- **L_pres — established.** A 150-example held-out bootstrap comparison of
+  PCIM trained with vs. without the preservation loss: scratch residual-
+  correlation delta 95% CI [0.188, 0.296], excludes zero. Given the
+  iteration mechanism above already prevents erasure, L_pres still adds a
+  real, measurable amount of shape fidelity on top of it, at a measured
+  cost of 1.64 dB PSNR.
+- **Does preserving the residual help detection?** A 360-cell frozen-
+  detector grid (PaDiM + PatchCore, 5 restorers, real MVTec), gated by a
+  harness-correctness check (PatchCore reproduces its published AUROC —
+  0.963 mean vs. published ~0.99 — at full train/test scale; the grid
+  itself runs at a reduced 16-image-per-category scale for speed) and a
+  bootstrap CI on every headline number. Result: **yes for DIVIDE on
+  PatchCore, no for DIVIDE on PaDiM, both statistically established** — a
+  real, detector-dependent effect, not a uniform "restoration helps"
+  finding, and specific to the few-normal-training regime the grid
+  actually tests (untested at published training scale).
+
 ---
 
 ## Status
@@ -126,14 +151,14 @@ the claim above rather than by design:
 | Learned-deblurring test | **done on real MVTec, CPU** (`results/drr_study_deblur_corr*.csv`) — Restormer's own deblurring checkpoints, not the denoising one |
 | Bridging ablation + nsr sweep (mechanism) | **done on real MVTec, CPU** (`results/wiener_bridge_ablation*.csv`, `results/wiener_nsr_sweep*.csv`, `figures/wiener_nsr_sweep.png`) — locates the iteration-vs-regularization mechanism, see **The claim** |
 | `defect_residual_correlation` (shape check alongside DRR) | **done, tested, applied retroactively to every table above** — see **The claim**'s metrics findings |
-| Frozen-detector harness (PatchCore/PaDiM/ReverseDistillation/EfficientAd) | built, PaDiM verified on CPU; others fit+scored at least once but flaky in dev sandbox — **never run on real MVTec or a GPU** |
+| Frozen-detector harness (PatchCore/PaDiM/ReverseDistillation/EfficientAd) | **PaDiM and PatchCore run on real MVTec, CPU** — PatchCore verified against its published AUROC at full train/test scale (`results/patchcore_repro_check.json`, mean 0.963) and both run through the full detection grid (`FINDINGS.md` §3); ReverseDistillation/EfficientAd still only fit+scored once each, flaky in dev sandbox — **never run on real MVTec or a GPU** |
 | Deep restorer loaders (NAFNet/Restormer/DiffBIR) | NAFNet/Restormer + Restormer's deblurring checkpoints run in-process on CPU, no GPU needed (weights downloaded, ~2–7s/image) — see `src/models/deep_restorers.py`; **DiffBIR still needs a GPU**, excluded from CPU studies on compute grounds |
 | PCIM — physics-consistent inverse module | built, tested (incl. the structural content-agnostic claim); **trained on CPU** (`configs/train_pcim_cpu.yaml`, 15000 steps) — see `results/train_pcim_cpu_eval.csv` |
 | Losses — L_rec / L_deg / L_freq / L_pres | built, tested against the real counterfactual pipeline |
 | SARG — sparse anomaly-residual guard | built, tested; **never trained** |
 | PCIM training script (resumable, CSV-logged) | built, tested incl. a real kill-and-resume check; **run to completion on CPU** — GPU run still unmeasured |
-| L_pres ablation harness | built, tested (incl. the fairness-assertion that both runs differ ONLY in `use_lpres`); **never run at meaningful scale — the central open question now that x_cons alone already preserves defects** |
-| Frozen-detector evaluation grid (resumable, CSV) | built, verified end-to-end on synthetic data; **never run on real MVTec** |
+| L_pres ablation harness | built, tested (incl. the fairness-assertion that both runs differ ONLY in `use_lpres`); **trained to completion on CPU and re-evaluated on the full 150-example held-out set with bootstrap CIs — the central open question is answered: established, see `FINDINGS.md` §2** |
+| Frozen-detector evaluation grid (resumable, CSV) | **run on real MVTec, CPU** — 360 cells, PaDiM + PatchCore × 5 restorers × 4 families × severities 2–4 × 3 categories, gated by a harness-reproduction check and bootstrapped `gap_closed` CIs — see `FINDINGS.md` §3. Runs at a reduced 16-image-per-category scale (untested at published training scale — see `FINDINGS.md` §3.2's data-scarce framing) |
 | Gradio demo | built, panel logic + Blocks construction verified; **never run against real weights** |
 
 300+ unit tests, all passing, all CPU. **Read [HANDOFF.md](HANDOFF.md) before running anything on a GPU** — it has the exact run order, every weight URL, and what "verified" does and doesn't mean for each piece above.
@@ -229,9 +254,8 @@ Everything above is CPU. These need a GPU:
 
 | Job | Cost | Notes |
 |---|---|---|
-| Frozen-detector harness on real MVTec | ~1 GPU-h | PaDiM verified on CPU/synthetic only; PatchCore/ReverseDistillation/EfficientAd built but never run on a GPU or real data |
 | PCIM to real convergence, SARG training | not estimable yet | PCIM ran to completion on CPU (`configs/train_pcim_cpu.yaml`, see **The claim**/Status) but not at GPU scale/resolution; SARG has never been trained at all |
-| Full evaluation grid | ~10–15 GPU-h, floor not ceiling on CPU; faster on GPU | resumable (`eval_grid.py`), embarrassingly parallel across cells but not yet parallelized in code |
+| Evaluation grid at published train/test scale | ~10–15 GPU-h, floor not ceiling on CPU; faster on GPU | The 360-cell grid already ran on CPU, real MVTec, at a reduced `n_train=16`/`n_test=16` scale (`FINDINGS.md` §3) — the harness itself is verified sound (`FINDINGS.md` §3.1's PatchCore reproduction check, full train/test scale, clean images only). What's untested is the *detection comparison* (not just the harness) at published train/test scale (200–320 train, 80–160 test) — resumable (`eval_grid.py`), embarrassingly parallel across cells but not yet parallelized in code |
 | DiffBIR | seconds/image on a GPU vs. no realistic CPU path | needs weights (Hugging Face, curl/wget-able — see HANDOFF.md); loader never executed |
 
 **Before any GPU session, run `./scripts/smoke.sh` and confirm `ALL GREEN`.**
@@ -262,6 +286,7 @@ sessions die on idle.
 ## Layout
 
 ```
+FINDINGS.md              full report: mechanism, L_pres, detection grid, each at its earned confidence level
 configs/                 experiment configs (yaml)
 scripts/smoke.sh         full CPU verification, run before every push
 src/utils/paths.py       environment-aware paths — never hardcode a path
@@ -282,10 +307,14 @@ src/data/mvtec.py        MVTec loading, with synthetic smoke fallback
 src/demo/app.py          Gradio demo — four panels, live relative-DRR readout
 src/experiments/drr_study.py       go/no-go experiment, resumable, ratio-of-means relative DRR
 src/experiments/wiener_regularization_sweep.py  classical Wiener's nsr swept 1e-5 to 1.0
-src/experiments/eval_grid.py       full frozen-detector evaluation grid
+src/experiments/eval_grid.py       full frozen-detector evaluation grid (image + pixel AUROC, gap_closed)
+src/experiments/bootstrap_grid_gapclosed.py  bootstrap CI on eval_grid's gap_closed, resampling test images
+src/experiments/grid_figures.py    figures for the detection grid (forest plot, AUROC bars, scratch DRR/corr)
+src/experiments/patchcore_repro_check.py  PatchCore at published config — harness-correctness gate for eval_grid
 src/experiments/train_pcim.py      PCIM training loop — config-driven, resumable
 src/experiments/ablate_lpres.py    trains WITH/WITHOUT L_pres, reports the relative-DRR delta
 src/experiments/eval_pcim_holdout.py  post-hoc diagnostics on a trained PCIM checkpoint
+src/experiments/compare_lpres_bootstrap.py  bootstrap CI on the L_pres ON/OFF delta, full held-out set
 src/experiments/dbde_validation.py defect-blindness / parameter-accuracy / reference-vs-blind figures
 configs/train_pcim_cpu.yaml        128x128 overnight-CPU-run config
 configs/train_pcim_gpu.yaml        256x256 GPU config
@@ -301,13 +330,20 @@ Stated plainly, not buried in a caveat clause:
 
 - **No diffusion restorer measured** (DiffBIR) — compute, not a technical
   blocker; excluded from every CPU study, loader kept working for a GPU box.
-- **Two detectors verified** (PaDiM on CPU/synthetic) — PatchCore,
-  ReverseDistillation, EfficientAd are built but never run on real MVTec or a
-  GPU.
+- **Two detectors verified on real MVTec, CPU** (PaDiM and PatchCore —
+  PatchCore's own published-AUROC reproduction check, `FINDINGS.md` §3.1,
+  confirms the harness is sound) — ReverseDistillation and EfficientAd are
+  built but never run on real MVTec or a GPU.
+- **The detection grid's own headline result is scoped to a reduced-data
+  regime** (`n_train=16`/`n_test=16` per category) and has not been re-run
+  at published training scale (200–320 train images) — see `FINDINGS.md`
+  §3.2. The harness reproduces published numbers at full scale; the
+  *detection comparison* has not been re-run at that scale, and could move
+  or vanish there.
 - **HDR (hallucinated defect rate) is defined and tested, never measured**
   on a trained detector + restorer pair.
-- **Every real-data study so far uses a reduced grid** — 3 categories, a
-  subset of families/severities, 10 images — not the full simulator's 6
+- **Every real-data DRR study so far uses a reduced grid** — 3 categories, a
+  subset of families/severities, 8–10 images — not the full simulator's 6
   families × 5 severities. Directional, not exhaustive.
 - **Illumination correction is ineffective at high severity** — `x_cons`
   PSNR tracks the raw degraded input's PSNR almost exactly at illumination

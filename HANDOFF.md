@@ -59,6 +59,17 @@ methodological findings about DRemR and DRR/residual-correlation are in
 README.md's "The claim" - read that before deciding what (if anything) still
 needs testing.
 
+**Two things built on top of this mechanism since the above was written, both
+also CPU-only and both answered, not open:** the L_pres ablation (does the
+preservation loss add anything beyond `x_cons`'s structural path? yes,
+established via bootstrap CI) and the Step 3 detection grid (does preserving
+the residual help detection AUROC? established as detector-dependent — yes
+for DIVIDE on PatchCore, no on PaDiM, in the `n_train=16` regime tested).
+**`FINDINGS.md` is the authoritative writeup of both** — read it before
+running the ablation or grid commands later in this document, since both
+have already run once on CPU and the commands below largely re-confirm at
+GPU/full scale rather than answer from a blank slate.
+
 ## Setup
 
 ```bash
@@ -114,10 +125,14 @@ Both calls either print a path or raise `FileNotFoundError` with the exact URL a
 
 NAFNet and Restormer's weights are on Google Drive and genuinely cannot be fetched with `wget`/`curl`/`gdown` reliably from a script — download them through a browser, on your own machine, then transfer them to the GPU box. DiffBIR's weights are on Hugging Face and *can* be fetched programmatically.
 
+**NAFNet and all three Restormer checkpoints (denoising, motion deblur, defocus deblur) are already present on this project's CPU dev machine and have been exercised heavily** — the go/no-go study, the learned-deblurring test, and the Step 3 detection grid's `restormer_deblur` restorer all ran against these exact files (`FINDINGS.md`, README's "The claim"). Only DiffBIR remains genuinely unfetched and unrun anywhere in this project. If you're setting up a *new* machine, the table below still applies; if you're continuing from this project's existing `checkpoints/` directory, only DiffBIR is missing.
+
 | Restorer | File | URL | Save as |
 |---|---|---|---|
 | NAFNet | `NAFNet-SIDD-width64.pth` | https://drive.google.com/file/d/14Fht1QQJ2gMlk4N1ERCRuElg8JfjrWWR/view | `checkpoints/NAFNet-SIDD-width64.pth` |
-| Restormer | `real_denoising.pth` | https://drive.google.com/file/d/1FF_4NTboTWQ7sHCq4xhyLZsSl0U0JfjH/view | `checkpoints/real_denoising.pth` |
+| Restormer (denoising) | `real_denoising.pth` | https://drive.google.com/file/d/1FF_4NTboTWQ7sHCq4xhyLZsSl0U0JfjH/view | `checkpoints/real_denoising.pth` |
+| Restormer (motion deblur) | `motion_deblurring.pth` | Google Drive **folder**: https://drive.google.com/drive/folders/1czMyfRTQDX3j3ErByYeZ1PM4GVLbJeGK — `gdown --folder` (the single-file `uc?id=` trick doesn't work on a folder) | `checkpoints/motion_deblurring.pth` |
+| Restormer (defocus deblur) | `single_image_defocus_deblurring.pth` | Google Drive **folder**: https://drive.google.com/drive/folders/1bRBG8DG_72AGA6-eRePvChlT5ZO4cwJ4 — contains BOTH single-image and dual-pixel variants; grab `single_image_defocus_deblurring.pth` specifically, **not** `dual_pixel_defocus_deblurring.pth` (that one needs 6-channel stereo input, a different task) | `checkpoints/single_image_defocus_deblurring.pth` |
 | DiffBIR (IRControlNet) | `v2.pth` | https://huggingface.co/lxq007/DiffBIR-v2/resolve/main/v2.pth | `checkpoints/v2.pth` |
 | DiffBIR (SD v2.1 base — also required) | `v2-1_512-ema-pruned.ckpt` | https://huggingface.co/stabilityai/stable-diffusion-2-1-base/resolve/main/v2-1_512-ema-pruned.ckpt | `checkpoints/v2-1_512-ema-pruned.ckpt` |
 
@@ -141,7 +156,7 @@ for name in ['nafnet', 'restormer', 'diffbir']:
 "
 ```
 
-This has never been run — I have no GPU and no weights. Expect friction on first attempt; the most likely failure modes are listed under Troubleshooting.
+`nafnet` and `restormer` (denoising) have since run this way successfully, repeatedly, on CPU — only `diffbir` remains genuinely untested, since its weights were never fetched. Expect friction on `diffbir` specifically on first attempt; the most likely failure modes are listed under Troubleshooting.
 
 ## Run order
 
@@ -205,6 +220,8 @@ h.close()
 
 **4. Evaluation grid — real data, all four detectors, the restorer set from step 2.**
 
+**A reduced-scope version of this step has already run, on CPU, real MVTec** — PaDiM + PatchCore only, 5 restorers, 4 families, severities 2–4, 3 categories, `n_train=16`/`n_test=16` per category, 360 cells (`FINDINGS.md` §3). It is gated by a PatchCore harness-reproduction check at published train/test scale (`results/patchcore_repro_check.json`, mean AUROC 0.963) confirming the harness itself is sound, and every headline `gap_closed` number has a bootstrap CI. The command below is the full-scope, GPU-target version (all 4 detectors, all restorers, all families/severities, full train/test splits) — still not run; read `FINDINGS.md` §3.2 before assuming the reduced-scope result above extends to it, since the reduced scope's own finding is explicitly scoped to `n_train=16` and explained by a mechanism (PaDiM's per-patch Gaussian being rank-deficient at that sample size) that may not apply once the training set is full-size.
+
 ```bash
 python -m src.experiments.eval_grid --categories carpet bottle screw \
     --detectors padim patchcore reverse_distillation efficientad \
@@ -228,19 +245,17 @@ python -m src.experiments.train_pcim --config configs/train_pcim_gpu.yaml --devi
 
 Save the trained state dict to `checkpoints/pcim.pt` (the script does this automatically via its checkpoint) — `src/models/divide_restorer.py` expects exactly that filename. SARG (`checkpoints/sarg.pt`, optional) has losses but no training script wiring it in yet; `divide_restorer.py` uses it if present and falls back to `x_full` alone if not.
 
-**An overnight CPU run of `configs/train_pcim_cpu.yaml` was started as part of this handoff** (128×128, 15000 steps, calibrated to ~8h on this laptop). Its result — final `relative_drr`/`dremr`/`psnr_normal` from `results/train_pcim_cpu_eval.csv`, and whatever the loss curve looked like — goes here once it's back:
+**The overnight CPU run of `configs/train_pcim_cpu.yaml` referenced above completed** (128×128, 15000 steps, `results/train_pcim_cpu_eval.csv`):
 
-> **[Overnight CPU run result: pending — to be filled in]**
+> **Overnight CPU run result: relative_drr 1.201, dremr 0.001, psnr_normal 25.69 dB (n=24) at step 15000.** Per-kind: texture 1.111, scratch 1.411, blob 1.148. The loop converges and learns something real on real-sized images — this specific number is 128×128/CPU/one run, not a GPU-scale verdict, but it stopped being "pending" and became the base checkpoint the L_pres ablation below was actually built on top of.
 
-This number is **not a GPU result and not the verdict** — 128×128, CPU, one specific run. Treat it as "does the loop actually learn something, at all" evidence, not as PCIM's real performance. The `--smoke` runs I did produced relative DRR figures that don't mean anything (a handful of steps on tiny synthetic images) — this overnight run is the first time the loop has seen a non-trivial number of steps on real image sizes.
-
-**The L_pres ablation** (`src/experiments/ablate_lpres.py`) is also written and smoke-verified, but has not been run at any meaningful scale — it needs two full training runs, so it's naturally the most expensive thing in this document per unit of insight. Once PCIM training itself is confirmed to be worth the compute (i.e. the overnight run above shows it's learning something), run:
+**The L_pres ablation has since run to completion and is answered, not still open.** `src/experiments/ablate_lpres.py` trained PCIM twice from `configs/train_pcim_cpu.yaml` (identical seed/data/steps, differing only in `loss.use_lpres`, asserted in code), then both final checkpoints were re-evaluated — inference only — on the full 150-example held-out set with a 2000-resample bootstrap CI on the ON−OFF delta. **Result: established.** Scratch residual-correlation delta 95% CI [0.188, 0.296], excludes zero — L_pres adds real, statistically supported shape fidelity beyond what `x_cons` alone provides, at a cost of 1.64 dB PSNR (95% CI [1.08, 2.22] dB). Full numbers: `FINDINGS.md` §2. This was run on CPU, not the GPU config below — a GPU/`configs/train_pcim_gpu.yaml` re-run at full 256×256 resolution has not been done and could move these numbers.
 
 ```bash
 python -m src.experiments.ablate_lpres --config configs/train_pcim_gpu.yaml
 ```
 
-*Output:* `results/ablate_lpres_result.json` plus the four usual CSVs (`_lpres_on`/`_lpres_off` × losses/eval). *Correct:* a positive `relative_drr_delta` (L_pres ON minus OFF) is the actual evidence for the paper's central novelty claim — L_pres does something beyond what x_cons's structural preservation already provides. A delta near zero or negative is a legitimate, reportable result (it would mean the structural path is carrying all the preservation benefit and L_pres isn't adding anything measurable) — report it as measured, the same as the go/no-go verdict.
+*Output:* `results/ablate_lpres_result.json` plus the four usual CSVs (`_lpres_on`/`_lpres_off` × losses/eval). *Correct:* a positive `relative_drr_delta` (L_pres ON minus OFF) is the actual evidence for the paper's central novelty claim — L_pres does something beyond what x_cons's structural preservation already provides. A delta near zero or negative is a legitimate, reportable result (it would mean the structural path is carrying all the preservation benefit and L_pres isn't adding anything measurable) — report it as measured, the same as the go/no-go verdict. (The CPU run already gave a clearly positive, bootstrap-established delta — see above; this GPU command is for confirming it holds at full resolution, not for answering the question from scratch.)
 
 **6. Re-run step 2 and step 4 with `divide` included**, once `checkpoints/pcim.pt` exists, to get DIVIDE's own numbers into the same tables as everything else.
 
@@ -254,7 +269,7 @@ python -m src.demo.app
 
 ## What is verified vs. what has never run
 
-Be precise about this — the 225 passing tests cover shapes, interfaces, and logic, not model convergence or restoration quality, and it would be easy to over-trust a green `smoke.sh`.
+Be precise about this — the 330+ passing tests cover shapes, interfaces, and logic, not model convergence or restoration quality, and it would be easy to over-trust a green `smoke.sh`.
 
 **Actually run and verified correct, on CPU, on real and/or synthetic data:**
 - Degradation simulator, synthetic anomaly generator, DBDE, all metrics (`drr`, `relative_drr`, `auroc`, `gap_closed`, ...) — this is the pre-existing, well-tested core.
@@ -264,8 +279,8 @@ Be precise about this — the 225 passing tests cover shapes, interfaces, and lo
 - Losses: all four, including `L_pres` against the real `degrade_pair()`/`paste_anomaly()` pipeline, not just hand-built tensors.
 - SARG: RPCA primitives, mask behavior, blending, gradients.
 - The classical restorer registry, the deep-restorer and DIVIDE fail-loud paths (real `RuntimeError`s, real messages, confirmed to name the actual missing file).
-- The frozen-detector harness: **PaDiM specifically** — fit + score, both classes, correct anomaly-map shape, repeated many times including inside the full test suite, reliably.
-- The evaluation grid runner end-to-end on synthetic data with PaDiM, including a genuine resume check (rerunning adds zero duplicate rows).
+- The frozen-detector harness: **PaDiM and PatchCore, both on real MVTec, CPU** — fit + score, both classes, correct anomaly-map shape, repeated many times including inside the full test suite and across the full 360-cell evaluation grid (`FINDINGS.md` §3), plus a dedicated PatchCore published-config reproduction check (`results/patchcore_repro_check.json`) confirming the harness matches its published AUROC at full train/test scale. ReverseDistillation and EfficientAd remain fit+scored at least once each in an isolated process, not through the full grid.
+- The evaluation grid runner end-to-end on **real MVTec** with PaDiM and PatchCore (`FINDINGS.md` §3, reduced `n_train=16`/`n_test=16` scope), not just synthetic data — including a genuine resume check (rerunning adds zero duplicate rows) and a reconciliation step for the image/pixel-CSV pair (`_reconcile_partial_cells`, `src/experiments/eval_grid.py`) that handles a crash between writing a cell's image rows and its pixel-level row.
 - The Gradio demo's panel logic and Blocks construction (not an actual running server — I didn't verify the browser-facing UI renders correctly, only that building it doesn't raise).
 - **The PCIM training loop's wiring and resumability** (`src/experiments/train_pcim.py`): `--smoke` mode runs end to end, and a real kill-and-resume test confirms a killed-and-restarted run produces the *identical* loss trajectory a same-seed uninterrupted run would (`tests/test_train_pcim.py::test_resumed_run_continues_the_same_sample_sequence_as_uninterrupted`) — this is the property the ablation harness's fairness guarantee depends on, so it's tested directly rather than assumed.
 - **Loss magnitude normalisation**: `calibrate_scale_factors()` is tested to actually bring wildly different raw magnitudes to the same order of magnitude, `loss.normalize: false` is tested to be a true no-op, and scale factors are tested to persist across a checkpoint resume rather than being recomputed.
@@ -273,10 +288,10 @@ Be precise about this — the 225 passing tests cover shapes, interfaces, and lo
 - **The L_pres ablation harness's fairness guarantee** (`src/experiments/ablate_lpres.py`): `_assert_only_use_lpres_differs` is tested to actually raise when the two variant configs drift in anything besides `loss.use_lpres`, and to pass when they don't.
 
 **Constructed correctly to the best of my research but never executed, because I have no GPU:**
-- NAFNet, Restormer, DiffBIR loaders — the subprocess/CLI commands are transcribed from each repo's README as of this writing; repos change, and I could not run a single one to confirm the exact flags still match.
-- PatchCore, ReverseDistillation, EfficientAd through the frozen-detector harness — each one **did** fit and score correctly at least once during development, in an isolated process, but this exact sandbox (Python 3.14 — PyTorch itself warns this is unsupported) produced non-reproducible failures across repeated identical runs. I could not fully root-cause this; see "Known fragile points" below. Treat these three as "structurally correct, not yet trustworthy" until you've run `tests/test_harness.py`-style checks for each of them a few times on your machine and they're consistently green.
-- **PCIM training and the L_pres ablation, at any meaningful scale.** The training loop's *mechanics* (checkpointing, resume, RNG-state fidelity, CSV logging) are verified above; whether the model actually *learns* anything useful is a separate question `--smoke` mode cannot answer (a handful of steps on tiny synthetic images). One CPU overnight run (128×128, 15000 steps) was started as part of this handoff — see the run-order section 5 for its result once available — but that is CPU-preliminary evidence the loop isn't broken, not a trained model.
-- DIVIDE as a restorer, the demo against real weights — untested by construction, since none of the artifacts they need exist yet.
+- NAFNet, Restormer, DiffBIR loaders — the subprocess/CLI commands are transcribed from each repo's README as of this writing; repos change, and I could not run a single one to confirm the exact flags still match. (Restormer's denoising *and* deblurring checkpoints, plus NAFNet, did end up getting exercised heavily on CPU this session — see below — so this caveat now applies mainly to DiffBIR and to whether the CLI commands still match upstream, not to whether the loaders work at all.)
+- ReverseDistillation, EfficientAd through the frozen-detector harness — each **did** fit and score correctly at least once during development, in an isolated process, but this exact sandbox (Python 3.14 — PyTorch itself warns this is unsupported) produced non-reproducible failures across repeated identical runs at the time this was written. I could not fully root-cause this; see "Known fragile points" below. **PatchCore no longer belongs in this list** — it has since run reliably and reproducibly through the full 360-cell evaluation grid plus a dedicated full-scale reproduction check, in this same sandbox, with no recurrence of the non-determinism (`FINDINGS.md` §3.1). Treat ReverseDistillation/EfficientAd as "structurally correct, not yet trustworthy" until similarly exercised.
+- ~~PCIM training and the L_pres ablation, at any meaningful scale.~~ **No longer true — both ran to completion on CPU and are answered, not open questions.** PCIM's overnight CPU run converged (see run-order section 5); the L_pres ablation ran two full training runs and was re-evaluated with bootstrap CIs on the full 150-example held-out set — established (`FINDINGS.md` §2). What remains genuinely untested is the *GPU-scale, 256×256* version of both — the CPU numbers are real results, not preliminary noise, but they are not GPU-resolution numbers.
+- DIVIDE as a restorer, the demo against real weights — DIVIDE-as-a-restorer has since run, on CPU, against its own real trained checkpoints (`src/models/divide_restorer.py::build_divide_restorer_from_run`, exercised throughout `FINDINGS.md` §3 and §2's bootstrap comparison) — this bullet no longer applies to it. The demo against real weights is addressed in step 7 below.
 
 ## CPU-preliminary results already gathered
 
