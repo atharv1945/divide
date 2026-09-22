@@ -1,23 +1,101 @@
 # FINDINGS
 
-Digital Image Processing (BCSE403L), VIT Vellore. This document reports two
-things at different levels of confidence, deliberately kept separate:
+Digital Image Processing (BCSE403L), VIT Vellore. This document reports
+three things at different levels of confidence, deliberately kept separate:
 
-1. **The L_pres claim — established.** A 150-example held-out bootstrap
-   comparison of the two final L_pres-ablation checkpoints.
-2. **The detection-grid results — mixed confidence, reported honestly.**
+1. **The single-shot vs. iterative deconvolution mechanism — established.**
+   The most striking, best-supported result this project has produced, and
+   the one everything after it builds on: single-shot Wiener deconvolution
+   erases defects regardless of regularization strength; PCIM's unrolled,
+   iterative structure does not. This comes first because it is why the
+   rest of the document is worth reading, not an afterthought to it.
+2. **The L_pres claim — established.** A 150-example held-out bootstrap
+   comparison of the two final L_pres-ablation checkpoints, refining the
+   mechanism above: given PCIM's iterative structure already avoids
+   erasure, does the *additional* preservation loss term do anything?
+3. **The detection-grid results — mixed confidence, reported honestly.**
    A 360-cell frozen-detector grid, gated by a harness-correctness check and
    a bootstrap CI on every headline number, because the first pass produced
    a result (PatchCore clean AUROC 20 points below published) that turned
    out to be a data-scale artifact, not a real detector finding — and
-   several of the grid's apparent effects do not survive resampling.
+   several of the grid's apparent effects do not survive resampling. That
+   same data-scale finding turns out to bound what the detection result
+   itself is entitled to claim.
 
 Every number below is in a committed CSV/JSON under `results/`, traceable to
 the script that produced it. No number here was estimated or interpolated.
 
 ---
 
-## 1. The L_pres claim (established)
+## 1. Single-shot vs. iterative deconvolution — the mechanism (established)
+
+**Question:** DIVIDE's whole architecture is premised on avoiding the defect
+erasure a naive inverse filter causes. Is that actually true, and if so, is
+it regularization tuning or something structural?
+
+**Method 1 — regularization sweep.** `src/experiments/wiener_regularization_sweep.py`
+swept classical Wiener's noise-to-signal regularization constant across five
+orders of magnitude, 1e-5 to 1.0 (`results/wiener_nsr_sweep_summary.csv`),
+measuring scratch residual correlation at each setting — the *shape* check
+(Pearson correlation between restored and true residual, mean-centred
+within the defect mask), used alongside DRR because a restorer can leave
+residual energy at a defect's location with roughly the right magnitude but
+the wrong shape; DRR alone cannot tell that apart from genuine
+preservation, especially once DRR approaches or exceeds 1.0. Sections 2 and
+3 both rely on this same distinction.
+
+| nsr | 1e-5 | 1e-4 | 1e-3 | 1e-2 | 1e-1 | 1.0 |
+|---|---|---|---|---|---|---|
+| scratch residual corr | 0.028 | 0.013 | −0.017 | −0.058 | −0.040 | 0.120 |
+
+![defect erosion vs Wiener regularization strength](figures/wiener_nsr_sweep.png)
+
+Across five orders of magnitude of the one knob a single-shot Wiener filter
+has, scratch residual correlation **stays within noise of zero throughout**
+(−0.058 to +0.120). The defect is not attenuated at some settings and
+preserved at others — it is gone at every setting tested. Regularization
+tuning cannot fix this.
+
+**Method 2 — bridging ablation.** `src/models/wiener_ablation.py`'s five
+configurations walk from classical Wiener to PCIM's own `x_cons` path one
+variable at a time (`results/wiener_bridge_ablation_summary.csv`), isolating
+which single change flips the outcome:
+
+| step | change | scratch relative DRR | scratch residual corr |
+|---|---|---|---|
+| A | classical Wiener, flat nsr | 0.079 | −0.058 |
+| B | + nsr derived from DBDE's own estimate | 0.129 | −0.053 |
+| C | + unrolled HQS (5 iterations, growing ρ), still raw-pixel domain | 1.377 | **0.864** |
+| D | + VST/illumination domain (= PCIM's `x_cons`) | 1.379 | 0.859 |
+| E | `x_cons`, regularization floor removed | 1.319 | 0.563 |
+
+At matched regularization magnitude, switching one-shot division (B) for
+unrolled half-quadratic splitting (C) flips scratch residual correlation
+from −0.053 to 0.864 in one step, nothing else changed — the defect goes
+from erased to genuinely preserved. **Iteration, not regularization
+strength, is what separates erosion from preservation.** Regularization
+still has a real, smaller job: config E shows removing PCIM's `nsr_floor`
+keeps the no-erosion property (0.563, nowhere near A/B's near-zero) but
+loses the extra gain C/D show — adequate regularization is what turns "no
+worse than doing nothing" into "measurably better," but iteration is what
+prevents the failure in the first place.
+
+**Why this is the load-bearing result.** Every other finding in this
+document assumes PCIM's iterative structure already avoids erasure — that
+assumption is what this section establishes, not what it takes for granted.
+It also narrows the project's original hypothesis: learned denoisers and
+learned deblurrers, run at full strength on real MVTec, do not show this
+failure mode either (see `README.md`'s "The claim" for that fuller
+investigation) — erasure is a property of single-shot closed-form inversion
+specifically, not of restoration or deconvolution in general. DIVIDE's
+architecture avoids a real, narrower failure than originally hypothesized,
+structurally rather than by luck
+(`tests/test_pcim.py::test_hqs_without_prox_is_linear` verifies the gated-off
+path is provably an affine, content-agnostic map).
+
+---
+
+## 2. The L_pres claim (established)
 
 **Question:** does the preservation loss `L_pres` do anything beyond what
 PCIM's `x_cons` structural path already provides?
@@ -46,16 +124,16 @@ residual correlation, and PSNR, overall and per anomaly kind.
 
 **The decisive number — scratch residual-correlation delta, CI [0.188, 0.296] — excludes zero. The claim is established at this sample size**, not merely suggestive: L_pres produces a real, statistically supported increase in residual *shape* fidelity for scratches, the anomaly kind this project cares about most, not just magnitude (DRR). Overall and blob show the same pattern, also established (every listed delta above except texture's DRR has a CI excluding zero).
 
-**Texture is not a contradiction, read correctly.** OFF→ON, texture's DRR moves from 1.261 toward 1.122 — *closer* to the faithful value of 1.0, i.e. less excess/ringing energy — while its residual correlation rises 0.545→0.716, an established increase. Per this project's own established finding (`README.md`, "The claim"), DRR above ~1.0 includes excess energy and residual correlation is the trustworthy shape measure; the correlation component of texture's story is established even though the DRR component alone isn't independently significant at n=56. Same mechanism as scratch and blob — L_pres pulling an over-amplified, distorted residual toward a smaller, more correctly-shaped one — not the opposite.
+**Texture is not a contradiction, read correctly.** OFF→ON, texture's DRR moves from 1.261 toward 1.122 — *closer* to the faithful value of 1.0, i.e. less excess/ringing energy — while its residual correlation rises 0.545→0.716, an established increase. Per Section 1's own finding, DRR above ~1.0 includes excess energy and residual correlation is the trustworthy shape measure; the correlation component of texture's story is established even though the DRR component alone isn't independently significant at n=56. Same mechanism as scratch and blob — L_pres pulling an over-amplified, distorted residual toward a smaller, more correctly-shaped one — not the opposite.
 
-**Cost:** L_pres costs 1.64 dB PSNR overall (95% CI [1.08, 2.22] dB, established, non-zero), consistent with the 1.46 dB seen on the ablation's own smaller eval set. Section 2 tests whether that cost buys anything in detection.
+**Cost:** L_pres costs 1.64 dB PSNR overall (95% CI [1.08, 2.22] dB, established, non-zero), consistent with the 1.46 dB seen on the ablation's own smaller eval set. Section 3 tests whether that cost buys anything in detection.
 
 ---
 
-## 2. The Step 3 detection grid — what actually held up under scrutiny
+## 3. The Step 3 detection grid — what actually held up under scrutiny
 
-**Question:** does preserving the defect residual (Section 1) translate into
-better anomaly-detection AUROC — the only thing an inspection engineer
+**Question:** does preserving the defect residual (Sections 1–2) translate
+into better anomaly-detection AUROC — the only thing an inspection engineer
 actually cares about? This is a link this project had never measured before
 Step 3.
 
@@ -70,7 +148,7 @@ rows) / `step3_grid_pixel.csv` (360 cells). Image- and pixel-level AUROC
 both computed (`anomaly_map` already returned by the detector at no extra
 inference cost).
 
-### 2.1 A result that needed gating before it meant anything
+### 3.1 A result that needed gating before it meant anything
 
 The grid's clean-image AUROC came back **PaDiM 0.867, PatchCore 0.781** —
 PatchCore roughly 20 points below its ~0.99 published MVTec figure, before
@@ -103,10 +181,16 @@ grid's 0.781 clean PatchCore AUROC is a consequence of scoring at
 `n_train=16` (a coreset built from a fraction of the normal patches a
 10%-sampling memory bank needs to cover) and `n_test=16`, not a defect in
 the detection code path. (Carpet's individual 0.919 sits a few points under
-the informal "0.95+" bar even at full scale — noted, not chased; it does
-not change the harness-soundness conclusion, since the *mean* and both other
-categories clear it comfortably and none is remotely close to the grid's
-20-point gap.)
+the informal "0.95+" bar even at full scale, against a published carpet
+figure around 0.98 — noted, not chased; the likeliest single cause is
+preprocessing, not the memory bank: this harness resizes directly to
+256×256 (`src/data/mvtec.py::load_image`), while the published PatchCore
+pipeline resizes to 256 and then centre-crops to 224, which changes both
+the effective field of view and the patch grid PatchCore's backbone sees.
+Not tested here, so stated as the likely cause, not a confirmed one. It
+does not change the harness-soundness conclusion — the *mean* and both
+other categories clear the bar comfortably, and none is remotely close to
+the grid's 20-point gap.)
 
 **Consequence for reading the grid below:** all detection numbers in this
 grid are measured at a **reduced-data configuration** (`n_train=16`,
@@ -114,9 +198,11 @@ grid are measured at a **reduced-data configuration** (`n_train=16`,
 every restorer and both detectors see the exact same reduced train/test
 sets — but the *absolute* AUROC values are not representative of
 production-scale PatchCore/PaDiM performance. The *relative* comparison
-between restorers, at this same reduced scale, is what Section 2.2 tests.
+between restorers, at this same reduced scale, is what Section 3.2 tests —
+and Section 3.2 argues this reduced-data regime is itself worth reporting
+on, not just a speed compromise to look past.
 
-### 2.2 Does restoration help detection? Only for some restorers, and only on one detector, with real support
+### 3.2 Does restoration help detection? Only for some restorers, and only on one detector, with real support — in a specific, nameable data regime
 
 Naive `gap_closed` (fraction of the clean→degraded AUROC gap recovered)
 averaged per cell blew up on cells where `auroc_clean≈auroc_degraded`
@@ -157,13 +243,25 @@ category, since they reuse the identical physical images —
   both CIs straddle zero comfortably. At this grid's scale (n_test=16), we
   cannot distinguish restormer_deblur's effect on detection from no effect
   at all, in either direction.
-- **A plausible mechanism** — PaDiM's per-patch Gaussian model penalizing
-  any restoration artifact as distribution shift, versus PatchCore's
-  nearest-neighbour memory bank tolerating small appearance changes more
-  readily — is *consistent with* the DIVIDE and (one-sided) wiener results,
-  but this grid does not test the mechanism directly and cannot confirm it;
-  it is stated here as a hypothesis the data does not contradict, not a
-  finding.
+- **A plausible mechanism, verified as far as it can be without a dedicated
+  study**: PaDiM's per-patch model is a multivariate Gaussian fit
+  per feature-map location over `n_features=100` dimensions (anomalib's own
+  published default for the resnet18 backbone used here — verified directly
+  against the installed library, not assumed). At `n_train=16`, each of
+  those 100-dimensional Gaussians is fit from **16 samples** — fewer samples
+  than dimensions, so the raw sample covariance is rank-deficient by
+  construction and only remains invertible because of the epsilon
+  regularization PaDiM's Mahalanobis-distance step adds to the diagonal.
+  A model held together by regularization at this sample size is exactly
+  the regime where any restoration artifact — even a faithful one — reads
+  as distribution shift, because the fitted "normal" distribution is itself
+  poorly determined. PatchCore's memory bank has no analogous per-location
+  dense-covariance step; it is structurally more tolerant of a small
+  training set, independent of anything about restoration. This is
+  *consistent with* the DIVIDE and (one-sided) wiener results and has a
+  verified structural basis, but the grid does not manipulate detector
+  regularization directly, so it is reported as a well-supported hypothesis,
+  not a confirmed causal mechanism.
 - **L_pres's own effect on detection is small and mostly a pixel-level
   effect, not an image-level one**: `divide_lpres_on` vs `_off` gap_closed
   is nearly identical at image level on PatchCore (0.189 vs 0.190) — the
@@ -172,10 +270,10 @@ category, since they reuse the identical physical images —
   0.105, `results/step3_grid_gapclosed_agg.csv`; no CI computed at pixel
   level, see Limitations). L_pres's benefit, to the extent the grid can see
   it, looks like *where* the anomaly map lands, not *whether* the image is
-  flagged — consistent with Section 1's residual-correlation (shape, not
+  flagged — consistent with Section 2's residual-correlation (shape, not
   magnitude) framing.
 
-**Bottom line for Section 2: "does preserving the defect residual help
+**Bottom line for Section 3: "does preserving the defect residual help
 detection" does not have a single yes/no answer at this grid's scale.**
 It helps, with statistical support, specifically for DIVIDE on PatchCore. It
 hurts, with statistical support, for DIVIDE and wiener on PaDiM. For
@@ -183,7 +281,29 @@ restormer_deblur, the grid is underpowered to say either way. This is not
 "DIVIDE works" — it is "DIVIDE's detection effect is real but
 detector-dependent," a materially narrower and more honest claim.
 
-### 2.3 Companion measurement: scratch DRR and residual correlation at grid scope
+**This result holds in a specific, nameable data regime — not a caveat to
+skip past.** Every detection number above comes from detectors fitted on
+**16 training images per category**. That is not an arbitrary weakness of
+this study: few-normal inspection is a genuine industrial scenario, not a
+contrived one — a new product line, a low-volume part, or a changeover
+where a plant has not yet accumulated hundreds of clean reference images is
+exactly the situation where an inspection system has to work with a
+handful of normals. The result this section reports — DIVIDE's detection
+effect flips sign between a regularization-dependent per-patch model
+(PaDiM) and a memory-bank model (PatchCore) — is therefore a real, useful
+finding *for that regime specifically*, grounded in the verified mechanism
+above (PaDiM's Gaussian is rank-deficient at n=16, held together by
+regularization; PatchCore structurally is not). **What this grid does not
+test, and what remains genuinely open, is whether the same split — or any
+version of it — holds at published training scale** (hundreds of normal
+images per category, where PaDiM's covariance is well-determined and the
+regularization-driven sensitivity this section identifies may not apply).
+No claim in this document extends to that regime; Section 3.1's
+full-scale PatchCore check verified the harness reproduces published
+numbers, not that the detection-comparison result reproduces at that scale
+— that is a different, unrun experiment.
+
+### 3.3 Companion measurement: scratch DRR and residual correlation at grid scope
 
 `src/experiments/drr_study.py` run at the same scope as the grid (3
 categories × 4 families × 3 severities, 8 base images/category,
@@ -202,7 +322,7 @@ identically; real MVTec test images don't have that pair).
 | divide_lpres_on | 1.189 | 0.778 | 25.64 |
 | divide_lpres_off | 0.865 | 0.590 | 26.15 |
 
-Consistent with Section 1's bootstrap finding at a broader scope (all 4
+Consistent with Section 2's bootstrap finding at a broader scope (all 4
 degradation families, not just the ablation's holdout mix): DIVIDE-with-
 L_pres has the highest scratch residual correlation of any restorer tested,
 including restormer_deblur. `divide_lpres_off`'s scratch DRR (0.865) sits
@@ -216,6 +336,7 @@ non-trivial work rather than marginal polish.
 
 | file | shows |
 |---|---|
+| `figures/wiener_nsr_sweep.png` | scratch residual correlation vs. regularization constant, Section 1 |
 | `figures/step3_gapclosed_forest.png` | gap_closed with 95% bootstrap CI, all 10 restorer×detector pairs |
 | `figures/step3_auroc_by_restorer.png` | clean / degraded / restored image-AUROC bars, both detectors |
 | `figures/step3_scratch_drr_corr.png` | scratch relative DRR + residual correlation by restorer, grid scope |
@@ -227,25 +348,30 @@ non-trivial work rather than marginal polish.
 
 | file | contents |
 |---|---|
-| `results/ablate_lpres_bootstrap.json` | Section 1's bootstrap CIs |
+| `results/wiener_nsr_sweep_summary.csv` | Section 1's regularization sweep |
+| `results/wiener_bridge_ablation_summary.csv` | Section 1's bridging ablation |
+| `results/ablate_lpres_bootstrap.json` | Section 2's bootstrap CIs |
 | `results/step3_grid.csv` / `_pixel.csv` / `_summary.csv` | raw 360-cell grid, image and pixel level |
 | `results/step3_grid_gapclosed_agg.csv` / `_by_family.csv` | ratio-of-means gap_closed, point estimates |
-| `results/step3_grid_gapclosed_bootstrap.csv` | Section 2.2's bootstrap CIs |
-| `results/patchcore_repro_check.json` | Section 2.1's published-config reproduction check |
-| `results/step3_drr_companion.csv` / `_by_kind.csv` | Section 2.3's companion study |
+| `results/step3_grid_gapclosed_bootstrap.csv` | Section 3.2's bootstrap CIs |
+| `results/patchcore_repro_check.json` | Section 3.1's published-config reproduction check |
+| `results/step3_drr_companion.csv` / `_by_kind.csv` | Section 3.3's companion study |
 
 ## Limitations
 
 - **The grid runs at a reduced data scale** (`n_train=16`, `n_test=16` per
   category vs. MVTec's full 83–320), chosen for a 360-cell × 5-restorer
-  grid's runtime, not to match published numbers. Section 2.1's check
+  grid's runtime, not to match published numbers. Section 3.1's check
   confirms the harness is sound at full scale; it does not make the grid's
-  own numbers full-scale numbers. A production-scale re-run (full
-  train/test splits) has not been done and would very plausibly move both
-  the absolute AUROCs and the gap_closed estimates.
-- **No CI on pixel-level gap_closed.** Section 2.2's bootstrap covers
+  own numbers full-scale numbers. Section 3.2 argues this reduced scale is
+  itself a real, nameable industrial regime (few-normal inspection) rather
+  than just a shortcut — but a production-scale re-run (full train/test
+  splits) has not been done and would very plausibly move both the absolute
+  AUROCs and the gap_closed estimates, possibly enough to change or erase
+  the PaDiM/PatchCore split Section 3.2 reports.
+- **No CI on pixel-level gap_closed.** Section 3.2's bootstrap covers
   image-level gap_closed only; the pixel-level point estimates reported in
-  `step3_grid_gapclosed_agg.csv` (and referenced in 2.2's L_pres discussion)
+  `step3_grid_gapclosed_agg.csv` (and referenced in 3.2's L_pres discussion)
   carry the same small-denominator risk this project has already documented
   and have not been resampled. Treat them as directional, not established.
 - **`restormer_deblur`'s null result is "not established," not "no
