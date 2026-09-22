@@ -1,108 +1,141 @@
+import json
+
 import numpy as np
 import pytest
 
-pytest.importorskip("anomalib")
-pytest.importorskip("lightning")
-pytest.importorskip("gradio")
+
+def _write_fake_manifest(tmp_path, monkeypatch):
+    """Builds a tiny, structurally-real manifest + PNGs so app.py/
+    static_demo.py can be tested without running precompute.py's real
+    (slow, model-dependent) pipeline."""
+    import cv2
+
+    import src.demo.app as app
+    import src.demo.precompute as precompute
+
+    data_dir = tmp_path / "demo_data"
+    img_dir = data_dir / "images"
+    img_dir.mkdir(parents=True)
+    monkeypatch.setattr(precompute, "_demo_data_dir", lambda: data_dir)
+    monkeypatch.setattr(app, "_demo_data_dir", lambda: data_dir)
+
+    img = (np.random.default_rng(0).random((8, 8, 3)) * 255).astype(np.uint8)
+    for name in ["c1_degraded", "c1_degraded_heat", "c1_wiener", "c1_wiener_heat"]:
+        cv2.imwrite(str(img_dir / f"{name}.png"), img)
+
+    manifest = dict(
+        detector="patchcore",
+        detector_choice_note="PatchCore chosen because ... (test note)",
+        score_note="score saturates because ... (test note)",
+        striking_case_note="look at the correlation, not just the mark (test note)",
+        panel_order=["degraded", "wiener", "restormer_deblur", "divide"],
+        panel_labels=precompute.PANEL_LABELS,
+        striking_case_id="c1",
+        combos=[dict(
+            id="c1", category="bottle", kind="scratch", family="defocus", severity=3,
+            panels=dict(
+                degraded=dict(image="images/c1_degraded.png", heatmap="images/c1_degraded_heat.png",
+                             score=0.5, mean_anomaly=0.31, relative_drr=1.0, residual_corr=0.6),
+                wiener=dict(image="images/c1_wiener.png", heatmap="images/c1_wiener_heat.png",
+                           score=0.4, mean_anomaly=0.22, relative_drr=0.27, residual_corr=0.02),
+                restormer_deblur=dict(error="weights not found"),
+                divide=dict(error="checkpoint not found"),
+            ),
+        )],
+    )
+    (data_dir / "manifest.json").write_text(json.dumps(manifest))
+    return data_dir, manifest
 
 
-def test_build_panels_runs_and_shapes_are_consistent():
-    from src.demo.app import build_panels, IMAGE_SIZE
+# --------------------------------------------------------------------------
+# app.py - pure lookup, no model/detector dependencies to import-skip on
+# --------------------------------------------------------------------------
 
-    panels = build_panels("noise", 3)
-    assert set(panels) == {"clean", "degraded", "restormer", "divide"}
+def test_load_manifest_fails_loudly_when_missing(tmp_path, monkeypatch):
+    import src.demo.app as app
+    monkeypatch.setattr(app, "_demo_data_dir", lambda: tmp_path / "nope")
 
-    for key, p in panels.items():
-        assert p.image.shape == (IMAGE_SIZE, IMAGE_SIZE, 3)
-        assert np.isfinite(p.image).all()
-        assert p.image.min() >= 0.0 and p.image.max() <= 1.0
-
-
-def test_clean_and_degraded_panels_always_score_successfully():
-    from src.demo.app import build_panels
-
-    panels = build_panels("defocus", 4)
-    assert panels["clean"].score is not None
-    assert panels["clean"].error is None
-    assert panels["degraded"].score is not None
-    assert panels["degraded"].error is None
+    with pytest.raises(RuntimeError) as exc:
+        app.load_manifest()
+    assert "src.demo.precompute" in str(exc.value)
 
 
-def test_divide_panel_fails_loud_not_crash_without_weights():
-    """'divide' has no trained checkpoint in this environment (or any CI
-    environment - it's this project's own model, nothing to download) - the
-    demo must show the fail-loud message in that panel, not raise out of
-    build_panels()."""
-    from src.demo.app import build_panels
+def test_load_manifest_and_combo_lookup(tmp_path, monkeypatch):
+    import src.demo.app as app
+    _write_fake_manifest(tmp_path, monkeypatch)
 
-    panels = build_panels("illumination", 2)
-    p = panels["divide"]
-    assert p.error is not None
-    assert p.score is None
-    assert np.array_equal(p.image, np.zeros_like(p.image))
+    manifest = app.load_manifest()
+    assert app.combo_choices(manifest) == ["c1"]
+    combo = app.find_combo(manifest, "c1")
+    assert combo["category"] == "bottle"
 
-
-def test_restormer_panel_runs_or_fails_loud():
-    """restormer's weights may or may not be present depending on the
-    machine (this one has them downloaded - see test_restorers.py); either
-    way build_panels() must not raise, and whichever branch is live must be
-    internally consistent (a score without an error, or an error without a
-    score, never both/neither)."""
-    from src.demo.app import build_panels
-    from src.models.deep_restorers import REPO_SPECS
-    from src.utils.paths import checkpoints_dir
-
-    panels = build_panels("illumination", 2)
-    p = panels["restormer"]
-    weights_present = (checkpoints_dir() / REPO_SPECS["restormer"]["weights"]).exists()
-    if weights_present:
-        assert p.error is None
-        assert p.score is not None
-    else:
-        assert p.error is not None
-        assert p.score is None
-        assert np.array_equal(p.image, np.zeros_like(p.image))
+    with pytest.raises(KeyError):
+        app.find_combo(manifest, "does-not-exist")
 
 
-@pytest.mark.parametrize("family", ["defocus", "motion", "illumination", "noise", "jpeg", "mixed"])
-def test_build_panels_runs_for_every_family(family):
-    from src.demo.app import build_panels
-    build_panels(family, 3)  # must not raise
+def test_panel_text_formats_score_drr_corr():
+    from src.demo.app import _panel_text
+    text = _panel_text(dict(score=0.4231, mean_anomaly=0.31, relative_drr=0.268, residual_corr=0.024))
+    assert "0.4231" in text and "0.268" in text and "0.024" in text and "0.31" in text
 
 
-def test_overlay_heatmap_shape_and_range():
-    from src.demo.app import overlay_heatmap
-    img = np.random.default_rng(0).random((32, 32, 3)).astype(np.float32)
-    amap = np.random.default_rng(1).random((32, 32)).astype(np.float32)
-    out = overlay_heatmap(img, amap)
-    assert out.shape == img.shape
-    assert out.min() >= 0.0 and out.max() <= 1.0
+def test_panel_text_formats_error():
+    from src.demo.app import _panel_text
+    text = _panel_text(dict(error="checkpoint not found"))
+    assert "UNAVAILABLE" in text and "checkpoint not found" in text
 
 
-def test_overlay_heatmap_resizes_mismatched_map():
-    from src.demo.app import overlay_heatmap
-    img = np.random.default_rng(0).random((32, 32, 3)).astype(np.float32)
-    amap = np.random.default_rng(1).random((20, 20)).astype(np.float32)  # different shape
-    out = overlay_heatmap(img, amap)
-    assert out.shape == img.shape
+def test_panel_paths_none_for_error_panel(tmp_path, monkeypatch):
+    from src.demo.app import _panel_paths
+    img, heat = _panel_paths(tmp_path, dict(error="no weights"))
+    assert img is None and heat is None
 
 
-def test_build_demo_constructs_blocks_without_launching():
-    """Catches Gradio API breakage between the pinned >=4.0 and whatever's
-    actually installed (6.28.0 here) without opening a server/port."""
+def test_panel_paths_resolves_against_data_dir(tmp_path):
+    from src.demo.app import _panel_paths
+    panel = dict(image="images/x.png", heatmap="images/x_heat.png")
+    img, heat = _panel_paths(tmp_path, panel)
+    assert img == str(tmp_path / "images/x.png")
+    assert heat == str(tmp_path / "images/x_heat.png")
+
+
+def test_build_demo_constructs_blocks_without_launching(tmp_path, monkeypatch):
+    """Catches Gradio API breakage without opening a server/port, using a
+    fake precomputed manifest so this doesn't depend on real model weights
+    or a real precompute run."""
+    pytest.importorskip("gradio")
+    _write_fake_manifest(tmp_path, monkeypatch)
+
     from src.demo.app import build_demo
     demo = build_demo()
     assert demo is not None
 
 
-def test_panel_outputs_formats_error_and_score_text():
-    from src.demo.app import _panel_outputs, PanelResult
-    import numpy as np
+# --------------------------------------------------------------------------
+# static_demo.py
+# --------------------------------------------------------------------------
 
-    ok = PanelResult(image=np.zeros((4, 4, 3), np.float32), score=0.42, drr_rel=0.8)
-    img, text = _panel_outputs(ok)
-    assert "0.4200" in text and "0.800" in text
+def test_build_html_embeds_images_and_striking_case(tmp_path, monkeypatch):
+    from src.demo.app import load_manifest
+    from src.demo.static_demo import build_html
 
-    bad = PanelResult(image=np.zeros((4, 4, 3), np.float32), score=None, error="no weights")
-    _, text2 = _panel_outputs(bad)
-    assert "UNAVAILABLE" in text2 and "no weights" in text2
+    data_dir, _ = _write_fake_manifest(tmp_path, monkeypatch)
+    manifest = load_manifest()
+    html = build_html(manifest, data_dir)
+
+    assert "data:image/png;base64," in html
+    assert "c1" in html
+    assert "checkpoint not found" in html  # divide's error surfaces, not silently dropped
+    assert "PatchCore chosen because" in html  # detector_choice_note present verbatim
+
+
+def test_build_html_is_self_contained_single_file(tmp_path, monkeypatch):
+    """No external script/style references - must work with no network and
+    no other files present besides the one HTML file."""
+    from src.demo.app import load_manifest
+    from src.demo.static_demo import build_html
+
+    data_dir, _ = _write_fake_manifest(tmp_path, monkeypatch)
+    html = build_html(load_manifest(), data_dir)
+    assert "<script src=" not in html
+    assert "<link " not in html

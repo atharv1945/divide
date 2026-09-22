@@ -1,0 +1,882 @@
+{
+  "detector": "patchcore",
+  "detector_choice_note": "This demo's heatmaps use PatchCore, not PaDiM. Step 3's bootstrap-CI grid (FINDINGS.md Sec. 3.2) found DIVIDE's detection benefit is established on PatchCore (95% CI excludes zero, positive) but reverses on PaDiM (established negative) - both at n_train=16, the same data-scarce regime this demo's detector is fit in. PatchCore is shown here because it is where the benefit is established, not because PaDiM was hidden: PaDiM's behavior in this regime is the opposite, and untested at published training scale for either detector.",
+  "score_note": "'score' is PatchCore's own calibrated image-level anomaly score - and it reads exactly 1.000 for every panel of every example here. That is real, not a bug: MinMax calibration is fit on only 16 normal training images (the same data-scarce regime as the note above), so its headroom is narrow, and every example in this demo carries an obvious pasted synthetic defect that saturates past it. 'mean anomaly' (the anomaly map's raw pixel-average, before that calibration clips it) is shown alongside it because it still varies meaningfully between panels and is what the heatmap actually shows.",
+  "striking_case_note": "Look closely at the mark itself, not just whether one is visible: Wiener's panel still shows a pale line at roughly the scratch's location (deconvolution rings near edges - a well-known classical artifact - so SOMETHING persists there even when the real signal is gone), but its residual correlation with the true scratch is 0.008 - essentially uncorrelated, i.e. that mark is not reliably the scratch anymore. DIVIDE's mark has correlation 0.883 - it is the scratch. The two panels can look deceptively similar side by side; that gap is exactly why this project measures the residual against a true counterfactual instead of trusting a single image by eye - see FINDINGS.md Sec. 1 for the same point made about DRR generally.",
+  "panel_order": [
+    "degraded",
+    "wiener",
+    "restormer_deblur",
+    "divide"
+  ],
+  "panel_labels": {
+    "degraded": "Degraded (no restoration)",
+    "wiener": "Classical Wiener",
+    "restormer_deblur": "Restormer Deblur",
+    "divide": "DIVIDE (with L_pres)"
+  },
+  "striking_case_id": "bottle_scratch_defocus_sev4",
+  "combos": [
+    {
+      "id": "bottle_scratch_defocus_sev2",
+      "category": "bottle",
+      "kind": "scratch",
+      "family": "defocus",
+      "severity": 2,
+      "panels": {
+        "degraded": {
+          "image": "images\\bottle_scratch_defocus_sev2_degraded.png",
+          "heatmap": "images\\bottle_scratch_defocus_sev2_degraded_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.4547235667705536,
+          "relative_drr": 1.0,
+          "residual_corr": 0.7986393747844335
+        },
+        "wiener": {
+          "image": "images\\bottle_scratch_defocus_sev2_wiener.png",
+          "heatmap": "images\\bottle_scratch_defocus_sev2_wiener_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.39692550897598267,
+          "relative_drr": 0.11167787024328604,
+          "residual_corr": 0.02008995374825416
+        },
+        "restormer_deblur": {
+          "image": "images\\bottle_scratch_defocus_sev2_restormer_deblur.png",
+          "heatmap": "images\\bottle_scratch_defocus_sev2_restormer_deblur_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.46476832032203674,
+          "relative_drr": 1.0783620686385378,
+          "residual_corr": 0.8339396586643198
+        },
+        "divide": {
+          "image": "images\\bottle_scratch_defocus_sev2_divide.png",
+          "heatmap": "images\\bottle_scratch_defocus_sev2_divide_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.26714810729026794,
+          "relative_drr": 1.1241893896743633,
+          "residual_corr": 0.9681472888920577
+        }
+      }
+    },
+    {
+      "id": "bottle_scratch_defocus_sev3",
+      "category": "bottle",
+      "kind": "scratch",
+      "family": "defocus",
+      "severity": 3,
+      "panels": {
+        "degraded": {
+          "image": "images\\bottle_scratch_defocus_sev3_degraded.png",
+          "heatmap": "images\\bottle_scratch_defocus_sev3_degraded_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.5907098054885864,
+          "relative_drr": 1.0,
+          "residual_corr": 0.7295368309330305
+        },
+        "wiener": {
+          "image": "images\\bottle_scratch_defocus_sev3_wiener.png",
+          "heatmap": "images\\bottle_scratch_defocus_sev3_wiener_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.49750033020973206,
+          "relative_drr": 0.10823020850209676,
+          "residual_corr": 0.015655114082532097
+        },
+        "restormer_deblur": {
+          "image": "images\\bottle_scratch_defocus_sev3_restormer_deblur.png",
+          "heatmap": "images\\bottle_scratch_defocus_sev3_restormer_deblur_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.548120379447937,
+          "relative_drr": 1.1511981019027842,
+          "residual_corr": 0.7944556885012891
+        },
+        "divide": {
+          "image": "images\\bottle_scratch_defocus_sev3_divide.png",
+          "heatmap": "images\\bottle_scratch_defocus_sev3_divide_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.35942524671554565,
+          "relative_drr": 1.214402096793658,
+          "residual_corr": 0.9327201674022524
+        }
+      }
+    },
+    {
+      "id": "bottle_scratch_defocus_sev4",
+      "category": "bottle",
+      "kind": "scratch",
+      "family": "defocus",
+      "severity": 4,
+      "panels": {
+        "degraded": {
+          "image": "images\\bottle_scratch_defocus_sev4_degraded.png",
+          "heatmap": "images\\bottle_scratch_defocus_sev4_degraded_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.7126634120941162,
+          "relative_drr": 1.0,
+          "residual_corr": 0.6965704001826162
+        },
+        "wiener": {
+          "image": "images\\bottle_scratch_defocus_sev4_wiener.png",
+          "heatmap": "images\\bottle_scratch_defocus_sev4_wiener_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.7081680297851562,
+          "relative_drr": 0.14646569916455088,
+          "residual_corr": 0.007862834991737077
+        },
+        "restormer_deblur": {
+          "image": "images\\bottle_scratch_defocus_sev4_restormer_deblur.png",
+          "heatmap": "images\\bottle_scratch_defocus_sev4_restormer_deblur_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.6051012873649597,
+          "relative_drr": 1.3253047834554266,
+          "residual_corr": 0.7842756043728145
+        },
+        "divide": {
+          "image": "images\\bottle_scratch_defocus_sev4_divide.png",
+          "heatmap": "images\\bottle_scratch_defocus_sev4_divide_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.6197823286056519,
+          "relative_drr": 1.379821624015309,
+          "residual_corr": 0.8828067529915425
+        }
+      }
+    },
+    {
+      "id": "carpet_scratch_motion_sev2",
+      "category": "carpet",
+      "kind": "scratch",
+      "family": "motion",
+      "severity": 2,
+      "panels": {
+        "degraded": {
+          "image": "images\\carpet_scratch_motion_sev2_degraded.png",
+          "heatmap": "images\\carpet_scratch_motion_sev2_degraded_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.9932267665863037,
+          "relative_drr": 1.0,
+          "residual_corr": 0.7419825818948262
+        },
+        "wiener": {
+          "image": "images\\carpet_scratch_motion_sev2_wiener.png",
+          "heatmap": "images\\carpet_scratch_motion_sev2_wiener_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.9078185558319092,
+          "relative_drr": 0.004927961684459037,
+          "residual_corr": -0.04541217652615814
+        },
+        "restormer_deblur": {
+          "image": "images\\carpet_scratch_motion_sev2_restormer_deblur.png",
+          "heatmap": "images\\carpet_scratch_motion_sev2_restormer_deblur_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.9480909109115601,
+          "relative_drr": 1.017966499462798,
+          "residual_corr": 0.7667209844474343
+        },
+        "divide": {
+          "image": "images\\carpet_scratch_motion_sev2_divide.png",
+          "heatmap": "images\\carpet_scratch_motion_sev2_divide_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.7759333252906799,
+          "relative_drr": 1.0540375022674113,
+          "residual_corr": 0.8733586247386914
+        }
+      }
+    },
+    {
+      "id": "carpet_scratch_motion_sev3",
+      "category": "carpet",
+      "kind": "scratch",
+      "family": "motion",
+      "severity": 3,
+      "panels": {
+        "degraded": {
+          "image": "images\\carpet_scratch_motion_sev3_degraded.png",
+          "heatmap": "images\\carpet_scratch_motion_sev3_degraded_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.9966917037963867,
+          "relative_drr": 1.0,
+          "residual_corr": 0.6590754067497592
+        },
+        "wiener": {
+          "image": "images\\carpet_scratch_motion_sev3_wiener.png",
+          "heatmap": "images\\carpet_scratch_motion_sev3_wiener_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.7259522080421448,
+          "relative_drr": 0.0008234065548411654,
+          "residual_corr": 0.009862671726385448
+        },
+        "restormer_deblur": {
+          "image": "images\\carpet_scratch_motion_sev3_restormer_deblur.png",
+          "heatmap": "images\\carpet_scratch_motion_sev3_restormer_deblur_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.9399661421775818,
+          "relative_drr": 1.0502389059699937,
+          "residual_corr": 0.6466371682787337
+        },
+        "divide": {
+          "image": "images\\carpet_scratch_motion_sev3_divide.png",
+          "heatmap": "images\\carpet_scratch_motion_sev3_divide_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.6744433641433716,
+          "relative_drr": 1.0588065389485253,
+          "residual_corr": 0.8656007807631565
+        }
+      }
+    },
+    {
+      "id": "carpet_scratch_motion_sev4",
+      "category": "carpet",
+      "kind": "scratch",
+      "family": "motion",
+      "severity": 4,
+      "panels": {
+        "degraded": {
+          "image": "images\\carpet_scratch_motion_sev4_degraded.png",
+          "heatmap": "images\\carpet_scratch_motion_sev4_degraded_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.9999074935913086,
+          "relative_drr": 1.0,
+          "residual_corr": 0.5955964062833714
+        },
+        "wiener": {
+          "image": "images\\carpet_scratch_motion_sev4_wiener.png",
+          "heatmap": "images\\carpet_scratch_motion_sev4_wiener_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.999919593334198,
+          "relative_drr": 0.5839189880777124,
+          "residual_corr": -0.024296596841863544
+        },
+        "restormer_deblur": {
+          "image": "images\\carpet_scratch_motion_sev4_restormer_deblur.png",
+          "heatmap": "images\\carpet_scratch_motion_sev4_restormer_deblur_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.9999074935913086,
+          "relative_drr": 1.0,
+          "residual_corr": 0.5955964062833714
+        },
+        "divide": {
+          "image": "images\\carpet_scratch_motion_sev4_divide.png",
+          "heatmap": "images\\carpet_scratch_motion_sev4_divide_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.999836802482605,
+          "relative_drr": 1.0466461752878862,
+          "residual_corr": 0.5923830158287137
+        }
+      }
+    },
+    {
+      "id": "screw_blob_defocus_sev2",
+      "category": "screw",
+      "kind": "blob",
+      "family": "defocus",
+      "severity": 2,
+      "panels": {
+        "degraded": {
+          "image": "images\\screw_blob_defocus_sev2_degraded.png",
+          "heatmap": "images\\screw_blob_defocus_sev2_degraded_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.38544797897338867,
+          "relative_drr": 1.0,
+          "residual_corr": 0.9989259541397193
+        },
+        "wiener": {
+          "image": "images\\screw_blob_defocus_sev2_wiener.png",
+          "heatmap": "images\\screw_blob_defocus_sev2_wiener_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.29548919200897217,
+          "relative_drr": 0.40545020006902177,
+          "residual_corr": -0.04450827363025307
+        },
+        "restormer_deblur": {
+          "image": "images\\screw_blob_defocus_sev2_restormer_deblur.png",
+          "heatmap": "images\\screw_blob_defocus_sev2_restormer_deblur_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.3556511700153351,
+          "relative_drr": 0.9970696406527868,
+          "residual_corr": 0.9888007392010453
+        },
+        "divide": {
+          "image": "images\\screw_blob_defocus_sev2_divide.png",
+          "heatmap": "images\\screw_blob_defocus_sev2_divide_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.20437292754650116,
+          "relative_drr": 1.0171504210054414,
+          "residual_corr": 0.9999653468622238
+        }
+      }
+    },
+    {
+      "id": "screw_blob_defocus_sev3",
+      "category": "screw",
+      "kind": "blob",
+      "family": "defocus",
+      "severity": 3,
+      "panels": {
+        "degraded": {
+          "image": "images\\screw_blob_defocus_sev3_degraded.png",
+          "heatmap": "images\\screw_blob_defocus_sev3_degraded_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.4845854341983795,
+          "relative_drr": 1.0,
+          "residual_corr": 0.996054822999945
+        },
+        "wiener": {
+          "image": "images\\screw_blob_defocus_sev3_wiener.png",
+          "heatmap": "images\\screw_blob_defocus_sev3_wiener_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.4172319173812866,
+          "relative_drr": 0.24510078478319935,
+          "residual_corr": -0.2043207541310968
+        },
+        "restormer_deblur": {
+          "image": "images\\screw_blob_defocus_sev3_restormer_deblur.png",
+          "heatmap": "images\\screw_blob_defocus_sev3_restormer_deblur_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.43186646699905396,
+          "relative_drr": 1.0182700644573794,
+          "residual_corr": 0.9951463633176478
+        },
+        "divide": {
+          "image": "images\\screw_blob_defocus_sev3_divide.png",
+          "heatmap": "images\\screw_blob_defocus_sev3_divide_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.286891371011734,
+          "relative_drr": 1.0351962081639832,
+          "residual_corr": 0.9999529943881617
+        }
+      }
+    },
+    {
+      "id": "screw_blob_defocus_sev4",
+      "category": "screw",
+      "kind": "blob",
+      "family": "defocus",
+      "severity": 4,
+      "panels": {
+        "degraded": {
+          "image": "images\\screw_blob_defocus_sev4_degraded.png",
+          "heatmap": "images\\screw_blob_defocus_sev4_degraded_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.5572329759597778,
+          "relative_drr": 1.0,
+          "residual_corr": 0.9858149087675097
+        },
+        "wiener": {
+          "image": "images\\screw_blob_defocus_sev4_wiener.png",
+          "heatmap": "images\\screw_blob_defocus_sev4_wiener_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.6267048716545105,
+          "relative_drr": 0.03669036731120149,
+          "residual_corr": -0.33298362441292506
+        },
+        "restormer_deblur": {
+          "image": "images\\screw_blob_defocus_sev4_restormer_deblur.png",
+          "heatmap": "images\\screw_blob_defocus_sev4_restormer_deblur_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.564475417137146,
+          "relative_drr": 1.011735724826298,
+          "residual_corr": 0.9712667371711147
+        },
+        "divide": {
+          "image": "images\\screw_blob_defocus_sev4_divide.png",
+          "heatmap": "images\\screw_blob_defocus_sev4_divide_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.5206708908081055,
+          "relative_drr": 1.0734629472272517,
+          "residual_corr": 0.9992525445913136
+        }
+      }
+    },
+    {
+      "id": "bottle_texture_noise_sev2",
+      "category": "bottle",
+      "kind": "texture",
+      "family": "noise",
+      "severity": 2,
+      "panels": {
+        "degraded": {
+          "image": "images\\bottle_texture_noise_sev2_degraded.png",
+          "heatmap": "images\\bottle_texture_noise_sev2_degraded_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.7809461355209351,
+          "relative_drr": 1.0,
+          "residual_corr": 0.9552676538747884
+        },
+        "wiener": {
+          "image": "images\\bottle_texture_noise_sev2_wiener.png",
+          "heatmap": "images\\bottle_texture_noise_sev2_wiener_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.7975066304206848,
+          "relative_drr": 0.8570591256419893,
+          "residual_corr": 0.003159915577615084
+        },
+        "restormer_deblur": {
+          "image": "images\\bottle_texture_noise_sev2_restormer_deblur.png",
+          "heatmap": "images\\bottle_texture_noise_sev2_restormer_deblur_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.7809461355209351,
+          "relative_drr": 1.0,
+          "residual_corr": 0.9552676538747884
+        },
+        "divide": {
+          "image": "images\\bottle_texture_noise_sev2_divide.png",
+          "heatmap": "images\\bottle_texture_noise_sev2_divide_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.7549535632133484,
+          "relative_drr": 0.9696150569961167,
+          "residual_corr": 0.9092548192650652
+        }
+      }
+    },
+    {
+      "id": "bottle_texture_noise_sev3",
+      "category": "bottle",
+      "kind": "texture",
+      "family": "noise",
+      "severity": 3,
+      "panels": {
+        "degraded": {
+          "image": "images\\bottle_texture_noise_sev3_degraded.png",
+          "heatmap": "images\\bottle_texture_noise_sev3_degraded_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.9007554054260254,
+          "relative_drr": 1.0,
+          "residual_corr": 0.919925919624605
+        },
+        "wiener": {
+          "image": "images\\bottle_texture_noise_sev3_wiener.png",
+          "heatmap": "images\\bottle_texture_noise_sev3_wiener_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.9046357870101929,
+          "relative_drr": 0.8569292359913052,
+          "residual_corr": 0.0036956400598567203
+        },
+        "restormer_deblur": {
+          "image": "images\\bottle_texture_noise_sev3_restormer_deblur.png",
+          "heatmap": "images\\bottle_texture_noise_sev3_restormer_deblur_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.9007554054260254,
+          "relative_drr": 1.0,
+          "residual_corr": 0.919925919624605
+        },
+        "divide": {
+          "image": "images\\bottle_texture_noise_sev3_divide.png",
+          "heatmap": "images\\bottle_texture_noise_sev3_divide_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.8815419673919678,
+          "relative_drr": 0.9741628803033507,
+          "residual_corr": 0.8738986520201071
+        }
+      }
+    },
+    {
+      "id": "bottle_texture_noise_sev4",
+      "category": "bottle",
+      "kind": "texture",
+      "family": "noise",
+      "severity": 4,
+      "panels": {
+        "degraded": {
+          "image": "images\\bottle_texture_noise_sev4_degraded.png",
+          "heatmap": "images\\bottle_texture_noise_sev4_degraded_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.9610506296157837,
+          "relative_drr": 1.0,
+          "residual_corr": 0.8708325711119494
+        },
+        "wiener": {
+          "image": "images\\bottle_texture_noise_sev4_wiener.png",
+          "heatmap": "images\\bottle_texture_noise_sev4_wiener_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.9629359245300293,
+          "relative_drr": 0.8567711779512872,
+          "residual_corr": 0.00415931368787196
+        },
+        "restormer_deblur": {
+          "image": "images\\bottle_texture_noise_sev4_restormer_deblur.png",
+          "heatmap": "images\\bottle_texture_noise_sev4_restormer_deblur_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.9610506296157837,
+          "relative_drr": 1.0,
+          "residual_corr": 0.8708325711119494
+        },
+        "divide": {
+          "image": "images\\bottle_texture_noise_sev4_divide.png",
+          "heatmap": "images\\bottle_texture_noise_sev4_divide_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.9494984149932861,
+          "relative_drr": 0.977148395986128,
+          "residual_corr": 0.8269754697305374
+        }
+      }
+    },
+    {
+      "id": "carpet_blob_mixed_sev2",
+      "category": "carpet",
+      "kind": "blob",
+      "family": "mixed",
+      "severity": 2,
+      "panels": {
+        "degraded": {
+          "image": "images\\carpet_blob_mixed_sev2_degraded.png",
+          "heatmap": "images\\carpet_blob_mixed_sev2_degraded_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.9359340071678162,
+          "relative_drr": 1.0,
+          "residual_corr": 0.9514476847170195
+        },
+        "wiener": {
+          "image": "images\\carpet_blob_mixed_sev2_wiener.png",
+          "heatmap": "images\\carpet_blob_mixed_sev2_wiener_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.6802316904067993,
+          "relative_drr": 0.8106907651294182,
+          "residual_corr": 0.3381714167975949
+        },
+        "restormer_deblur": {
+          "image": "images\\carpet_blob_mixed_sev2_restormer_deblur.png",
+          "heatmap": "images\\carpet_blob_mixed_sev2_restormer_deblur_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.717976987361908,
+          "relative_drr": 0.993558965954127,
+          "residual_corr": 0.8475828444227581
+        },
+        "divide": {
+          "image": "images\\carpet_blob_mixed_sev2_divide.png",
+          "heatmap": "images\\carpet_blob_mixed_sev2_divide_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.4709628224372864,
+          "relative_drr": 0.993687969815343,
+          "residual_corr": 0.5566533919419356
+        }
+      }
+    },
+    {
+      "id": "carpet_blob_mixed_sev3",
+      "category": "carpet",
+      "kind": "blob",
+      "family": "mixed",
+      "severity": 3,
+      "panels": {
+        "degraded": {
+          "image": "images\\carpet_blob_mixed_sev3_degraded.png",
+          "heatmap": "images\\carpet_blob_mixed_sev3_degraded_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.9939825534820557,
+          "relative_drr": 1.0,
+          "residual_corr": 0.945116759877217
+        },
+        "wiener": {
+          "image": "images\\carpet_blob_mixed_sev3_wiener.png",
+          "heatmap": "images\\carpet_blob_mixed_sev3_wiener_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.9578191041946411,
+          "relative_drr": 0.7231976571156725,
+          "residual_corr": 0.2504975243028573
+        },
+        "restormer_deblur": {
+          "image": "images\\carpet_blob_mixed_sev3_restormer_deblur.png",
+          "heatmap": "images\\carpet_blob_mixed_sev3_restormer_deblur_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.9895930290222168,
+          "relative_drr": 0.9936018209899221,
+          "residual_corr": 0.902963472988228
+        },
+        "divide": {
+          "image": "images\\carpet_blob_mixed_sev3_divide.png",
+          "heatmap": "images\\carpet_blob_mixed_sev3_divide_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.9050769805908203,
+          "relative_drr": 0.9906600049428566,
+          "residual_corr": 0.5290524630459683
+        }
+      }
+    },
+    {
+      "id": "carpet_blob_mixed_sev4",
+      "category": "carpet",
+      "kind": "blob",
+      "family": "mixed",
+      "severity": 4,
+      "panels": {
+        "degraded": {
+          "image": "images\\carpet_blob_mixed_sev4_degraded.png",
+          "heatmap": "images\\carpet_blob_mixed_sev4_degraded_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.9981791377067566,
+          "relative_drr": 1.0,
+          "residual_corr": 0.9471626533572471
+        },
+        "wiener": {
+          "image": "images\\carpet_blob_mixed_sev4_wiener.png",
+          "heatmap": "images\\carpet_blob_mixed_sev4_wiener_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.9921351075172424,
+          "relative_drr": 0.5580511406664521,
+          "residual_corr": 0.13847144659969698
+        },
+        "restormer_deblur": {
+          "image": "images\\carpet_blob_mixed_sev4_restormer_deblur.png",
+          "heatmap": "images\\carpet_blob_mixed_sev4_restormer_deblur_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.9970066547393799,
+          "relative_drr": 0.9209215630708736,
+          "residual_corr": 0.8660502913362433
+        },
+        "divide": {
+          "image": "images\\carpet_blob_mixed_sev4_divide.png",
+          "heatmap": "images\\carpet_blob_mixed_sev4_divide_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.9793210029602051,
+          "relative_drr": 0.9462950955105021,
+          "residual_corr": 0.40758351190538666
+        }
+      }
+    },
+    {
+      "id": "screw_scratch_mixed_sev2",
+      "category": "screw",
+      "kind": "scratch",
+      "family": "mixed",
+      "severity": 2,
+      "panels": {
+        "degraded": {
+          "image": "images\\screw_scratch_mixed_sev2_degraded.png",
+          "heatmap": "images\\screw_scratch_mixed_sev2_degraded_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.5846372246742249,
+          "relative_drr": 1.0,
+          "residual_corr": 0.9348090653283601
+        },
+        "wiener": {
+          "image": "images\\screw_scratch_mixed_sev2_wiener.png",
+          "heatmap": "images\\screw_scratch_mixed_sev2_wiener_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.582874059677124,
+          "relative_drr": 0.816516509012664,
+          "residual_corr": 0.3963178706643577
+        },
+        "restormer_deblur": {
+          "image": "images\\screw_scratch_mixed_sev2_restormer_deblur.png",
+          "heatmap": "images\\screw_scratch_mixed_sev2_restormer_deblur_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.5846372246742249,
+          "relative_drr": 1.0,
+          "residual_corr": 0.9348090653283601
+        },
+        "divide": {
+          "image": "images\\screw_scratch_mixed_sev2_divide.png",
+          "heatmap": "images\\screw_scratch_mixed_sev2_divide_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.6007218956947327,
+          "relative_drr": 1.011514094296635,
+          "residual_corr": 0.9399089977347064
+        }
+      }
+    },
+    {
+      "id": "screw_scratch_mixed_sev3",
+      "category": "screw",
+      "kind": "scratch",
+      "family": "mixed",
+      "severity": 3,
+      "panels": {
+        "degraded": {
+          "image": "images\\screw_scratch_mixed_sev3_degraded.png",
+          "heatmap": "images\\screw_scratch_mixed_sev3_degraded_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.739666223526001,
+          "relative_drr": 1.0,
+          "residual_corr": 0.8889631903747973
+        },
+        "wiener": {
+          "image": "images\\screw_scratch_mixed_sev3_wiener.png",
+          "heatmap": "images\\screw_scratch_mixed_sev3_wiener_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.7415006160736084,
+          "relative_drr": 0.8271521455607151,
+          "residual_corr": 0.40262715516376546
+        },
+        "restormer_deblur": {
+          "image": "images\\screw_scratch_mixed_sev3_restormer_deblur.png",
+          "heatmap": "images\\screw_scratch_mixed_sev3_restormer_deblur_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.739666223526001,
+          "relative_drr": 1.0,
+          "residual_corr": 0.8889631903747973
+        },
+        "divide": {
+          "image": "images\\screw_scratch_mixed_sev3_divide.png",
+          "heatmap": "images\\screw_scratch_mixed_sev3_divide_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.7491395473480225,
+          "relative_drr": 1.0156426862483254,
+          "residual_corr": 0.8906539729097358
+        }
+      }
+    },
+    {
+      "id": "screw_scratch_mixed_sev4",
+      "category": "screw",
+      "kind": "scratch",
+      "family": "mixed",
+      "severity": 4,
+      "panels": {
+        "degraded": {
+          "image": "images\\screw_scratch_mixed_sev4_degraded.png",
+          "heatmap": "images\\screw_scratch_mixed_sev4_degraded_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.8393927216529846,
+          "relative_drr": 1.0,
+          "residual_corr": 0.8366431247695756
+        },
+        "wiener": {
+          "image": "images\\screw_scratch_mixed_sev4_wiener.png",
+          "heatmap": "images\\screw_scratch_mixed_sev4_wiener_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.8548984527587891,
+          "relative_drr": 0.8295757074645989,
+          "residual_corr": 0.4054538610954078
+        },
+        "restormer_deblur": {
+          "image": "images\\screw_scratch_mixed_sev4_restormer_deblur.png",
+          "heatmap": "images\\screw_scratch_mixed_sev4_restormer_deblur_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.8393927216529846,
+          "relative_drr": 1.0,
+          "residual_corr": 0.8366431247695756
+        },
+        "divide": {
+          "image": "images\\screw_scratch_mixed_sev4_divide.png",
+          "heatmap": "images\\screw_scratch_mixed_sev4_divide_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.8478255867958069,
+          "relative_drr": 1.0183140777819988,
+          "residual_corr": 0.8399645979481711
+        }
+      }
+    },
+    {
+      "id": "bottle_texture_motion_sev2",
+      "category": "bottle",
+      "kind": "texture",
+      "family": "motion",
+      "severity": 2,
+      "panels": {
+        "degraded": {
+          "image": "images\\bottle_texture_motion_sev2_degraded.png",
+          "heatmap": "images\\bottle_texture_motion_sev2_degraded_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.4676946997642517,
+          "relative_drr": 1.0,
+          "residual_corr": 0.943883949508434
+        },
+        "wiener": {
+          "image": "images\\bottle_texture_motion_sev2_wiener.png",
+          "heatmap": "images\\bottle_texture_motion_sev2_wiener_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.4724723696708679,
+          "relative_drr": 0.8999298762183647,
+          "residual_corr": 0.6195800356223267
+        },
+        "restormer_deblur": {
+          "image": "images\\bottle_texture_motion_sev2_restormer_deblur.png",
+          "heatmap": "images\\bottle_texture_motion_sev2_restormer_deblur_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.4676946997642517,
+          "relative_drr": 1.0,
+          "residual_corr": 0.943883949508434
+        },
+        "divide": {
+          "image": "images\\bottle_texture_motion_sev2_divide.png",
+          "heatmap": "images\\bottle_texture_motion_sev2_divide_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.4718537926673889,
+          "relative_drr": 0.9961006871629242,
+          "residual_corr": 0.9458737538325565
+        }
+      }
+    },
+    {
+      "id": "bottle_texture_motion_sev3",
+      "category": "bottle",
+      "kind": "texture",
+      "family": "motion",
+      "severity": 3,
+      "panels": {
+        "degraded": {
+          "image": "images\\bottle_texture_motion_sev3_degraded.png",
+          "heatmap": "images\\bottle_texture_motion_sev3_degraded_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.6144470572471619,
+          "relative_drr": 1.0,
+          "residual_corr": 0.9005413526625392
+        },
+        "wiener": {
+          "image": "images\\bottle_texture_motion_sev3_wiener.png",
+          "heatmap": "images\\bottle_texture_motion_sev3_wiener_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.5279000997543335,
+          "relative_drr": 0.4794935416292966,
+          "residual_corr": -0.03597829166644982
+        },
+        "restormer_deblur": {
+          "image": "images\\bottle_texture_motion_sev3_restormer_deblur.png",
+          "heatmap": "images\\bottle_texture_motion_sev3_restormer_deblur_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.45823007822036743,
+          "relative_drr": 1.1996168916550511,
+          "residual_corr": 0.9543376896340743
+        },
+        "divide": {
+          "image": "images\\bottle_texture_motion_sev3_divide.png",
+          "heatmap": "images\\bottle_texture_motion_sev3_divide_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.5425360202789307,
+          "relative_drr": 1.304959179542541,
+          "residual_corr": 0.9718974642559902
+        }
+      }
+    },
+    {
+      "id": "bottle_texture_motion_sev4",
+      "category": "bottle",
+      "kind": "texture",
+      "family": "motion",
+      "severity": 4,
+      "panels": {
+        "degraded": {
+          "image": "images\\bottle_texture_motion_sev4_degraded.png",
+          "heatmap": "images\\bottle_texture_motion_sev4_degraded_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.7176023125648499,
+          "relative_drr": 1.0,
+          "residual_corr": 0.8589533050483645
+        },
+        "wiener": {
+          "image": "images\\bottle_texture_motion_sev4_wiener.png",
+          "heatmap": "images\\bottle_texture_motion_sev4_wiener_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.7244155406951904,
+          "relative_drr": 2.584349284081699,
+          "residual_corr": -0.5298267572662599
+        },
+        "restormer_deblur": {
+          "image": "images\\bottle_texture_motion_sev4_restormer_deblur.png",
+          "heatmap": "images\\bottle_texture_motion_sev4_restormer_deblur_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.7176023125648499,
+          "relative_drr": 1.0638204143563883,
+          "residual_corr": -0.006161278765843461
+        },
+        "divide": {
+          "image": "images\\bottle_texture_motion_sev4_divide.png",
+          "heatmap": "images\\bottle_texture_motion_sev4_divide_heat.png",
+          "score": 1.0,
+          "mean_anomaly": 0.7084076404571533,
+          "relative_drr": 1.2663156937410573,
+          "residual_corr": 0.7935854927491713
+        }
+      }
+    }
+  ]
+}
